@@ -5,13 +5,10 @@ use scorpion::optim::Solver;
 use scorpion::orbit::Oracle;
 use scorpion::Problem;
 
-
 /// Command-line arguments parser
 #[derive(Parser)]
 pub struct Args {
-
     // =============== I/O files =============== //
-    
     /// Path to .csv file input containing debris orbital data
     pub input_path: String,
 
@@ -25,9 +22,7 @@ pub struct Args {
     #[arg(long, default_value = "barycenter")]
     pub chaser_start: String,
 
-
     // =============== Problem parameters =============== //
-
     /// Maximum number of chasers
     #[arg(long, default_value_t = 5)]
     pub max_chasers: usize,
@@ -40,9 +35,7 @@ pub struct Args {
     #[arg(long, default_value_t = 31_536_000.0)]
     pub mission_time: f64,
 
-
     // =============== Oracle parameters =============== //
-
     /// Type of transfer strategy to use for maneuvers ("direct": direct
     /// transfer using maximum thrust; "drift": drift transfer using
     /// intermediate orbit; "best": select best strategy among all available)
@@ -53,9 +46,7 @@ pub struct Args {
     #[arg(long, default_value_t = 0.003)]
     pub max_thrust: f64,
 
-
     // =============== Solver parameters =============== //
-
     /// Level of aggressiveness in the solver (0-6, higher = more aggressive)
     #[arg(long, default_value_t = 3)]
     pub level: usize,
@@ -70,7 +61,6 @@ pub struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-
     let args = Args::parse();
 
     // Load debris from input file
@@ -78,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let debris = Loader::load(&args.input_path);
     println!("  loaded {} debris", debris.len());
     println!();
-    
+
     // Set problem data
     println!("Problem parameters");
     println!("  chaser start : {}", args.chaser_start);
@@ -86,11 +76,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  max load     : {}", args.max_load);
     println!("  max time     : {:.0} sec", args.mission_time);
     let problem = Problem::new(
-        &debris, 
-        args.chaser_start, 
-        args.max_chasers, 
-        args.max_load, 
-        args.mission_time
+        &debris,
+        args.chaser_start,
+        args.max_chasers,
+        args.max_load,
+        args.mission_time,
     );
     println!();
 
@@ -99,8 +89,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  strategy     : {}", args.strategy);
     println!("  max thrust   : {} m/s^2", args.max_thrust);
     println!();
-    let oracle = Oracle::new(args.strategy, args.max_thrust);
-   
+    let oracle = Oracle::new(args.strategy, args.max_thrust, 6378e3);
+
     // Set solver (used to optimize chaser routes)
     println!("Solver parameters");
     println!("  preset level : {}", args.level);
@@ -112,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run solver
     let solution = solver.solver(&problem, &oracle);
     println!("\n{}", solution);
-    
+
     // Write solution to file if output path provided
     if let Some(output_path) = &args.output_path {
         Writer::write(output_path, &solution);

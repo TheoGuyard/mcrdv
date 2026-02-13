@@ -4,17 +4,16 @@ use std::time::Instant;
 
 use crate::optim::crossover::Crossover;
 use crate::optim::generator::Generator;
-use crate::optim::solution::Solution;
 use crate::optim::metric::Metric;
 use crate::optim::params::Params;
 use crate::optim::population::Population;
 use crate::optim::search::Search;
+use crate::optim::solution::Solution;
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
 /// Length of log lines in terminal output
 const LOG_LENGTH: usize = 99;
-
 
 /// Solver for space debris remediation routing problem
 pub struct Solver {
@@ -33,10 +32,8 @@ pub struct Solver {
 }
 
 impl Solver {
-
     /// Instantiate solver and its components with given parameters
     pub fn new(params: Params) -> Self {
-
         let metric = Metric::new(
             params.penalty_load_init,
             params.penalty_load_increase,
@@ -48,13 +45,10 @@ impl Solver {
             params.penalty_time_decrease,
             params.penalty_time_min,
             params.penalty_time_max,
-            params.target_ratio
+            params.target_ratio,
         );
 
-        let generator = Generator::new(
-            params.pop_init,
-            params.generation_method.clone()
-        );
+        let generator = Generator::new(params.pop_init, params.generation_method.clone());
 
         let population = Population::new(
             params.pop_min,
@@ -63,16 +57,14 @@ impl Solver {
             params.nb_elite,
             params.adapt_iter,
         );
-        
+
         let crossover = Crossover::new(
             params.nb_pick,
             params.load_threshold_factor,
-            params.time_threshold_factor
+            params.time_threshold_factor,
         );
 
-        let search = Search::new(
-            params.nb_neighbors, 
-        );
+        let search = Search::new(params.nb_neighbors);
 
         Self {
             params,
@@ -92,34 +84,31 @@ impl Solver {
 
     /// Run the solver and return the best solution constructed
     pub fn solver(&mut self, problem: &Problem, oracle: &Oracle) -> Solution {
-
         self.print_head();
-        
+
         let t0 = Instant::now();
         let mut rng = SmallRng::seed_from_u64(self.params.seed);
-
 
         // ========== Initialization ========== //
 
         // Initialize local search engine
         self.search.initialize(problem, oracle);
-        
+
         // Initialize population
         self.generator.initialize(
             problem,
-            oracle, 
-            &mut self.metric, 
+            oracle,
+            &mut self.metric,
             &mut self.population,
             &self.search,
-            &mut rng
+            &mut rng,
         );
-
 
         // ========== Main genetic selection loop ========== //
 
         let mut best = self.population.best().clone();
-        let mut iter: usize = 0;  // total iterations
-        let mut nimp: usize = 0;  // iterations since last improvement
+        let mut iter: usize = 0; // total iterations
+        let mut nimp: usize = 0; // iterations since last improvement
 
         if !best.is_feasible() {
             eprintln!(
@@ -131,29 +120,25 @@ impl Solver {
         self.print_iter(iter, nimp, t0);
 
         loop {
-            
             // Termination criteria checks
-            if t0.elapsed().as_secs_f64() > self.params.limit_time { break; }
-            if nimp >= self.params.limit_nimp { break; }
-            if iter >= self.params.limit_iter { break; }
-            
+            if t0.elapsed().as_secs_f64() > self.params.limit_time {
+                break;
+            }
+            if nimp >= self.params.limit_nimp {
+                break;
+            }
+            if iter >= self.params.limit_iter {
+                break;
+            }
+
             // Generate new solution by crossover
-            let mut solution = self.crossover.generate(
-                problem,
-                oracle,
-                &self.metric,
-                &self.population,
-                &mut rng
-            );
+            let mut solution =
+                self.crossover
+                    .generate(problem, oracle, &self.metric, &self.population, &mut rng);
 
             // Improve new solution by local search
-            self.search.run(
-                &mut solution,
-                problem,
-                oracle,
-                &self.metric,
-                &mut rng
-            );
+            self.search
+                .run(&mut solution, problem, oracle, &self.metric, &mut rng);
 
             // Add new solution to population
             self.population.add(solution, &mut self.metric);
@@ -166,14 +151,13 @@ impl Solver {
             } else {
                 nimp += 1;
             }
-            
+
             iter += 1;
 
             // Logging
             if iter % self.params.log_iter == 0 {
                 self.print_iter(iter, nimp, t0);
             }
-
         }
 
         if !best.is_feasible() {
@@ -195,11 +179,11 @@ impl Solver {
         println!("{}", "-".repeat(LOG_LENGTH));
         println!(
             "{:>8} {:>8} {:>8} | {:>12} {:>12} | {:>6} {:>6} {:>6} {:>10} {:>10}",
-            "iter", 
-            "(last)", 
-            "time", 
-            "cost [m/s]",
-            "time [s]",
+            "iter",
+            "(last)",
+            "time",
+            "cost [km/s]",
+            "time [d]",
             "feas.",
             "inf.",
             "ratio",
@@ -210,14 +194,14 @@ impl Solver {
     }
 
     fn print_iter(&self, iter: usize, nimp: usize, t0: Instant) {
-
         let mut best_cost = "--".to_string();
         let mut best_time = "--".to_string();
 
         match self.population.best_feasible() {
-            Some(sol) => { 
-                best_cost = format!("{:.2}", sol.total_cost);
-                best_time = format!("{:.2}", sol.total_time());
+            Some(sol) => {
+                best_cost = format!("{:.2}", sol.total_cost / 1000.0); // convert m/s to km/s
+                best_time = format!("{:.2}", sol.total_time() / (24. * 60. * 60.));
+                // convert s to d
             }
             None => {}
         };
@@ -228,14 +212,13 @@ impl Solver {
             n_fea as f64 / (n_inf + n_fea) as f64
         } else {
             0.0
-        }; 
-
+        };
 
         println!(
             "{:8} {:8} {:>8.2} | {:>12} {:>12} | {:>6} {:>6} {:>6.2} {:>10.2e} {:>10.2e}",
-            iter, 
-            nimp, 
-            t0.elapsed().as_secs_f64(), 
+            iter,
+            nimp,
+            t0.elapsed().as_secs_f64(),
             best_cost,
             best_time,
             n_fea,
@@ -248,6 +231,10 @@ impl Solver {
 
     fn print_tail(&self, iter: usize, t0: Instant) {
         println!("{}", "-".repeat(LOG_LENGTH));
-        println!("Terminated in {} iterations and {:.2} seconds", iter, t0.elapsed().as_secs_f64());
+        println!(
+            "Terminated in {} iterations and {:.2} seconds",
+            iter,
+            t0.elapsed().as_secs_f64()
+        );
     }
 }
