@@ -170,7 +170,7 @@ impl Solver {
             iter += 1;
 
             // Logging
-            if iter % self.params.log_iter == 0 {
+            if iter.is_multiple_of(self.params.log_iter) {
                 self.print_iter(iter, nimp, t0);
             }
 
@@ -185,7 +185,7 @@ impl Solver {
 
         self.print_tail(iter, t0);
 
-        return best;
+        best
     }
 
     // ======================== Printing utilities ========================
@@ -214,13 +214,10 @@ impl Solver {
         let mut best_cost = "--".to_string();
         let mut best_time = "--".to_string();
 
-        match self.population.best_feasible() {
-            Some(sol) => { 
-                best_cost = format!("{:.2}", sol.total_cost);
-                best_time = format!("{:.2}", sol.total_time());
-            }
-            None => {}
-        };
+        if let Some(sol) = self.population.best_feasible() { 
+            best_cost = format!("{:.2}", sol.total_cost);
+            best_time = format!("{:.2}", sol.total_time());
+        }
 
         let n_fea = self.population.feasible.solutions.len();
         let n_inf = self.population.infeasible.solutions.len();

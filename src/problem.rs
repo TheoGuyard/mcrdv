@@ -38,8 +38,8 @@ impl Problem {
             );
         }
 
-        // Clone debris states
-        let mut states = debris.clone();
+        // Owned debris states to be modified
+        let mut states = debris.to_owned();
 
         // Set chasers start position (insert as first element of the states vector)
         match chaser_start.as_str() {

@@ -225,11 +225,11 @@ impl Generator {
         oracle: &Oracle,
         rng: &mut SmallRng
     ) -> Solution {
-        return match self.generation_method.as_str() {
+        match self.generation_method.as_str() {
             "random" => self.random_solution(problem, oracle, rng),
             "greedy" => self.greedy_solution(problem, oracle, rng),
             _ => panic!("Unknown population initialization method: {}", self.generation_method),
-        };
+        }
     }
 
     /// Generate an initial population of solutions

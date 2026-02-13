@@ -32,6 +32,8 @@ pub struct Metric {
 }
 
 impl Metric {
+
+    #![allow(clippy::too_many_arguments)]
     pub fn new(
         penalty_load: f64,
         penalty_load_increase: f64,

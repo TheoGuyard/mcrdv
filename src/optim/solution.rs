@@ -43,7 +43,8 @@ impl Solution {
             succ: vec![0; n],
         };
         sol.recompute_metrics(problem);
-        return sol;
+        
+        sol
     }
 
     /// Recompute all solution metrics (except penalized cost)
@@ -75,7 +76,7 @@ impl Solution {
     /// Whether the solution satisfies time and load constraints
     #[inline]
     pub fn is_feasible(&self) -> bool {
-        self.load_excess <= 0 && self.time_excess <= 0.0
+        self.load_excess == 0 && self.time_excess == 0.0
     }
 
     /// Total number of debris collected across all sequences

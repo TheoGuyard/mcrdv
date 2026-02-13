@@ -108,9 +108,9 @@ impl Params {
             // Top level parameters
             limit_nimp                  : 0,
             limit_iter                  : 0,
-            limit_time                  : limit_time,
+            limit_time,
             log_iter                    : 100,
-            seed                        : seed,
+            seed,
             // Metric parameters
             penalty_load_init           : 1.0,
             penalty_load_increase       : 2.0,

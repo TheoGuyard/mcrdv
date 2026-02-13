@@ -10,6 +10,7 @@ use crate::optim::metric::Metric;
 const CLONE_EPS: f64 = 1e-6;
 
 /// Feasible or infeasible subpopulation with score and diversity metrics
+#[derive(Default)]
 pub struct Subpopulation {
     /// Subpopulation solutions
     pub solutions: Vec<Solution>,
@@ -23,12 +24,7 @@ pub struct Subpopulation {
 
 impl Subpopulation {
     pub fn new() -> Self {
-        Self {
-            solutions: Vec::new(),
-            proxi: Vec::new(),
-            score: Vec::new(),
-            order: Vec::new(),
-        }
+        Self::default()
     }
 }
 
@@ -87,8 +83,8 @@ impl Population {
         };
 
         // Record solution feasibility status in rolling windows
-        self.load_window.push_back(sol.load_excess <= 0);
-        self.time_window.push_back(sol.time_excess <= 0.0);
+        self.load_window.push_back(sol.load_excess == 0);
+        self.time_window.push_back(sol.time_excess == 0.0);
 
         // Insert solution and update subpopulation attributes
         let idx = sub.solutions.len();
@@ -104,7 +100,7 @@ impl Population {
 
         // Trigger penalty adaptation and reorder subpopulations
         debug_assert_eq!(self.load_window.len(), self.time_window.len());
-        if self.load_window.len() % self.adapt_iter == 0 {
+        if self.load_window.len().is_multiple_of(self.adapt_iter) {
             let frac_load_feasible = self
                 .load_window
                 .iter()
@@ -222,13 +218,13 @@ impl Population {
         let mut worst_idx = 0;
         let mut worst_is_clone = sub.proxi[0]
             .first()
-            .map_or(false, |&(d, _)| d <= CLONE_EPS);
+            .is_some_and(|&(d, _)| d <= CLONE_EPS);
         let mut worst_rank = sub.score[0];
 
         for i in 1..sub.solutions.len() {
             let is_clone = sub.proxi[i]
                 .first()
-                .map_or(false, |&(d, _)| d <= CLONE_EPS);
+                .is_some_and(|&(d, _)| d <= CLONE_EPS);
             let score = sub.score[i];
 
             if (is_clone && !worst_is_clone) || (is_clone == worst_is_clone && score > worst_rank) {
@@ -308,14 +304,14 @@ impl Population {
 
         // Average distance to nb_close nearest neighbors
         let mut avg_dist = vec![0.0; n];
-        for i in 0..n {
+        for (i, avg_dist_i) in avg_dist.iter_mut().enumerate().take(n) {
             let neighbors = &sub.proxi[i];
             let k = nb_close.min(neighbors.len());
             let mut sum = 0.0;
             for (dist, _) in neighbors.iter().take(k) {
                 sum += dist;
             }
-            avg_dist[i] = if k > 0 { sum / k as f64 } else { 0.0 };
+            *avg_dist_i = if k > 0 { sum / k as f64 } else { 0.0 };
         }
 
         // Diversity ranking (larger distance to neighbors ==> better ranking)
