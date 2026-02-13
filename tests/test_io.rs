@@ -9,7 +9,7 @@ use std::fs;
 fn test_loader_iridium_csv() {
     let states = Loader::load("data/iridium.csv");
     assert!(
-        states.len() > 0,
+        !states.is_empty(),
         "Should load at least one debris from iridium.csv"
     );
     // Check that values are physically reasonable
@@ -23,7 +23,7 @@ fn test_loader_iridium_csv() {
 #[test]
 fn test_loader_ordc_csv() {
     let states = Loader::load("data/ordc.csv");
-    assert!(states.len() > 0, "Should load at least one debris from ordc.csv");
+    assert!(!states.is_empty(), "Should load at least one debris from ordc.csv");
 }
 
 #[test]

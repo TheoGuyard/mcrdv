@@ -135,9 +135,9 @@ impl Crossover {
         // Find the best number of sequences (allow fewer than k if lower cost)
         let mut best_k = k;
         let mut best_c = memo[k][n];
-        for s in 1..k {
-            if memo[s][n] < best_c {
-                best_c = memo[s][n];
+        for (s, memo_s) in memo.iter().enumerate().take(k).skip(1) {
+            if memo_s[n] < best_c {
+                best_c = memo_s[n];
                 best_k = s;
             }
         }
@@ -267,10 +267,7 @@ impl Crossover {
             k_goal, 
         );
 
-        // Build solution from sequences
-        let solution = Solution::new(problem, sequences);
-
-        solution
+        Solution::new(problem, sequences)
     }
 }
 

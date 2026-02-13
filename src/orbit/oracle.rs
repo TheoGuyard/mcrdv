@@ -1,6 +1,7 @@
 use crate::orbit::State;
 use crate::orbit::constants::{MU, RE, J2};
 
+
 /// Physical oracle to perform operations on orbital states
 pub struct Oracle {
     /// Type of transfer strategy to use for maneuvers. Current choices are:
@@ -12,10 +13,13 @@ pub struct Oracle {
     max_thrust: f64,
 }
 
+/// Signature of oracle evaluation function, regardless of the strategy used
+type EvaluationType = fn(&Oracle, &State, &State) -> (f64, f64);
+
 impl Oracle {
 
     pub fn new(strategy: String, max_thrust: f64) -> Self {
-        Self { strategy: strategy, max_thrust }
+        Self { strategy, max_thrust }
     }
 
     /// Evaluate cost and time of transfer between two orbital states
@@ -27,30 +31,23 @@ impl Oracle {
 
         // Evaluate transfer cost and time based on selected strategy
         match self.strategy.as_str() {
-            "direct" => {
-                return self.evaluate_direct(&src_prop, &dst_prop)
-            }
-            "drift" => {
-                return self.evaluate_drift(&src_prop, &dst_prop)
-            }
-            "best" => {
-                return self.evaluate_best(&src_prop, &dst_prop)
-            }
+            "direct" => { self.evaluate_direct(&src_prop, &dst_prop) }
+            "drift" => { self.evaluate_drift(&src_prop, &dst_prop) }
+            "best" => { self.evaluate_best(&src_prop, &dst_prop) }
             _ => panic!("Unsupported transfer strategy: {}", self.strategy),
         }
     }
 
     /// Time-independent distance estimate between two orbital states
     pub fn distance(&self, src: &State, dst: &State) -> f64 {
-        let distance = (
+        (
             (src.a - dst.a).powi(2) +
             (src.e - dst.e).powi(2) +
             (src.i - dst.i).powi(2) +
             (src.O - dst.O).powi(2) +
             (src.o - dst.o).powi(2) +
             (src.t - dst.t).powi(2)
-        ).sqrt();
-        return distance;
+        ).sqrt()
     }
 
     /// Propagate orbital elements forward by `dt` seconds
@@ -64,16 +61,14 @@ impl Oracle {
         let dot_O = -1.5 * scale * state.i.cos();
         let dot_o = 0.75 * scale * (5.0 * state.i.cos().powi(2) - 1.0);
 
-        let state_at_dt = State {
+        State {
             a: state.a,
             e: state.e,
             i: state.i,
             O: state.O + dot_O * dt,
             o: state.o + dot_o * dt,
             t: state.t,
-        };
-
-        return state_at_dt;
+        }
     }
     
     /// Time-of-flight between two orbital states using direct transfer
@@ -99,21 +94,20 @@ impl Oracle {
         let dotxx_O = scale / (src.i.sin() * ((1.0 - epow2 * cos_o.powi(2)).sqrt() -  src.e * sin_o.abs()));
 
         // Time of flight estimate
-        let tof = (
+        (
             (delta_a / dotxx_a).powi(2) +
             (delta_e / dotxx_e).powi(2) +
             (delta_i / dotxx_i).powi(2) +
             (delta_O / dotxx_O).powi(2)
-        ).sqrt();
-
-        return tof;
+        ).sqrt()
     }
 
     /// Evaluate cost and time of direct transfer between two orbital states
     fn evaluate_direct(&self, src: &State, dst: &State) -> (f64, f64) {
         let time = self.time_direct(src, dst);
         let cost = self.max_thrust * time;
-        return (cost, time);
+        
+        (cost, time)
     }
 
     /// Evaluate cost and time of drift transfer between two orbital states
@@ -125,7 +119,7 @@ impl Oracle {
     /// Evaluate cost and time of best transfer between two orbital states
     fn evaluate_best(&self, src: &State, dst: &State) -> (f64, f64) {
         
-        let strategies: [fn(&Self, &State, &State) -> (f64, f64); 2] = [
+        let strategies: [EvaluationType; 2] = [
             Self::evaluate_direct,
             Self::evaluate_drift,
         ];

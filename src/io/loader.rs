@@ -54,6 +54,6 @@ impl Loader {
             states.push(state);
         }
 
-        return states;
+        states
     }
 }

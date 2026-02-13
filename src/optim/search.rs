@@ -379,6 +379,7 @@ impl Search {
 
     /// Try moving state in sequence s1 at position pos1 with state in sequence
     /// s2 at position pos2 or to swap the two states (take best of both moves)
+    #[allow(clippy::too_many_arguments)]
     fn move_inter_relocate(
         &self,
         problem: &Problem,
@@ -470,6 +471,7 @@ impl Search {
     }
 
     /// Swap tails starting at pos1 and pos2 between sequences s1 and s2
+    #[allow(clippy::too_many_arguments)]
     fn move_2opt_star(
         &self,
         problem: &Problem,
