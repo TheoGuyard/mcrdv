@@ -45,7 +45,7 @@ Examples of library usage can be run as
 cargo run --release --example <filename>  
 ```
 
-where `<filename>` is the name of one of the files in the [example](`examples/`) folder (without the `.rs` extension).
+where `<filename>` is the name of one of the files in the [example](examples/) folder (without the `.rs` extension).
 
 
 ## I/O format
@@ -58,7 +58,7 @@ The input of `scorpion` is a `.csv` file with one row per debris object, represe
 * `omega[rad]`: argument of perigee in radians
 * `theta[rad]`: true anomaly in radians
 
-See the [data](`data/`) folder for example input files.
+See the [data](data/) folder for example input files.
 When the `--output-path` option is provided, a plain-text solution file describing the best solution found is written to the specified path.
 
 
