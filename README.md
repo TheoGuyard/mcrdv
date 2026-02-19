@@ -26,26 +26,15 @@ cd scorpion
 cargo build
 ```
 
-Tests can be run with 
+Tests can be run with `cargo test` to check that everything is working correctly. The main executable can be used as follows:
 
 ```bash
-cargo test --
+cargo run -- <file_path.csv> [options]
 ```
 
-to check that everything is working correctly. The main executable can be used as follows:
-
-```bash
-cargo run -- <debris.csv> [options]
-```
-
+where `<file_path.csv>` is the path to the input file describing the debris objects in `.csv` format (see below for details on the I/O format).
 Details on available options can be listed with `cargo run -- --help`.
-Examples of library usage can be run as
-
-```bash
-cargo run --example <filename>  
-```
-
-where `<filename>` is the name of one of the files in the [example](examples/) folder (without the `.rs` extension).
+Examples of library usage can be run as `cargo run --example <filename>` where `<filename>` is the name of one of the files in the [example](examples/) folder (without the `.rs` extension).
 
 
 ## I/O format
