@@ -2,6 +2,7 @@ mod crossover;
 mod generator;
 mod metric;
 mod params;
+mod polisher;
 mod population;
 mod search;
 mod sequence;
