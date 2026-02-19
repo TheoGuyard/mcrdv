@@ -2,7 +2,7 @@
 #[derive(Clone)]
 pub struct Params {
 
-    // ===== Top level parameters
+    // ===== Solver parameters
 
     /// Limit of iterations with no improvement until termination
     pub limit_nimp: usize,
@@ -99,13 +99,22 @@ pub struct Params {
 
     /// Number of neighbors to consider in local search operations
     pub nb_neighbors: usize,
+
+
+    // ===== Polisher parameters
+
+    /// Method to polish solutions ("none" or "dp")
+    pub polish_method: String,
+    
+    /// Time step in dynamic-programming polishing method
+    pub dp_time_step: f64,
 }
 
 impl Params {
     /// Create parameters with baseline values
     pub fn base(limit_time: f64, seed: u64) -> Self {
         Self {
-            // Top level parameters
+            // Solver parameters
             limit_nimp                  : 0,
             limit_iter                  : 0,
             limit_time,
@@ -138,6 +147,9 @@ impl Params {
             time_threshold_factor       : 1.5,
             // Local search parameters
             nb_neighbors                : 30,
+            // Polisher parameters
+            polish_method               : "dp".to_string(),
+            dp_time_step                : 86_400.0,
         }
     }
 

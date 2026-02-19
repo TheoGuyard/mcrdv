@@ -23,26 +23,26 @@ The codebase is organized into the following modules:
 ```bash
 git clone https://github.com/TheoGuyard/scorpion.git
 cd scorpion
-cargo build --release
+cargo build
 ```
 
 Tests can be run with 
 
 ```bash
-cargo test --release --
+cargo test --
 ```
 
 to check that everything is working correctly. The main executable can be used as follows:
 
 ```bash
-cargo run --release -- <debris.csv> [options]
+cargo run -- <debris.csv> [options]
 ```
 
-Details on available options can be listed with `cargo run --release -- --help`.
+Details on available options can be listed with `cargo run -- --help`.
 Examples of library usage can be run as
 
 ```bash
-cargo run --release --example <filename>  
+cargo run --example <filename>  
 ```
 
 where `<filename>` is the name of one of the files in the [example](examples/) folder (without the `.rs` extension).

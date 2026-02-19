@@ -76,6 +76,12 @@ impl Metric {
         seq.cost + self.sequence_penalty(problem, seq)
     }
 
+    /// Feasibility status of a sequence
+    #[inline]
+    pub fn sequence_is_feasible(&self, problem: &Problem, seq: &Sequence) -> bool {
+        self.sequence_penalty(problem, seq) == 0.0
+    }
+
     /// Penalty of an solution for constraint violations
     #[inline]
     pub fn penalty(&self, sol: &Solution) -> f64 {
@@ -86,6 +92,12 @@ impl Metric {
     #[inline]
     pub fn value(&self, sol: &Solution) -> f64 {
         sol.total_cost + self.penalty(sol)
+    }
+
+    /// Feasibility status of a sequence
+    #[inline]
+    pub fn is_feasible(&self, sol: &Solution) -> bool {
+        self.penalty(sol) == 0.0
     }
 
     /// Check whether `a` is strictly better than `b` (feasibility then value)
