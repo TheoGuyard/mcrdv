@@ -1,6 +1,6 @@
+use rand::Rng;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 
 use crate::optim::metric::Metric;
 use crate::optim::polisher::Polisher;
@@ -11,29 +11,29 @@ use crate::optim::solution::Solution;
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
-
-/// Generating operator for creating initial solutions
-pub struct Generator {
+/// Parameters for Generator operator
+#[derive(Clone)]
+pub struct GeneratorParams {
     /// Initial population size
     pub pop_init: usize,
-    /// Method to generate the initial solutions ("random" or "greedy")
+    /// Method to generate initial solutions:
+    /// - "random": randomly assign debris to chaser routes
+    /// - "greedy": assign debris to chaser routes using nearest-neighbor
     pub generation_method: String,
 }
 
+/// Generating operator for creating initial solutions
+pub struct Generator {
+    pub params: GeneratorParams,
+}
+
 impl Generator {
-    /// Instantiate new generator
-    pub fn new(pop_init: usize, generation_method: String) -> Self {
-        Self { pop_init, generation_method }
+    pub fn new(params: GeneratorParams) -> Self {
+        Self { params }
     }
 
     /// Generate an solution by randomly assigning debris to chaser routes
-    fn random_solution(
-        &self,
-        problem: &Problem,
-        oracle: &Oracle,
-        rng: &mut SmallRng,
-    ) -> Solution {
-
+    fn random_solution(&self, problem: &Problem, oracle: &Oracle, rng: &mut SmallRng) -> Solution {
         let n = problem.states.len();
 
         // All debris state indices, except chaser start state at index 0
@@ -50,27 +50,22 @@ impl Generator {
             // Add debris to the sequence until constraint violation
             let mut i = 0;
             while i < remaining.len() {
-
                 // Check load constraint (whether one more debris can be visited)
-                if load >= problem.max_load { break; }
+                if load >= problem.max_load {
+                    break;
+                }
 
                 let node = remaining[i];
                 let prev = *indices.last().unwrap();
 
                 // Check time constraint (whether we can go to debris and return to depot)
-                let (_, tof_to) = oracle.evaluate(
-                    &problem.states[prev],
-                    &problem.states[node],
-                    time
-                );
-                let (_, tof_back) = oracle.evaluate(
-                    &problem.states[node],
-                    &problem.states[0],
-                    time + tof_to
-                );
+                let (_, tof_to) =
+                    oracle.evaluate(&problem.states[prev], &problem.states[node], time);
+                let (_, tof_back) =
+                    oracle.evaluate(&problem.states[node], &problem.states[0], time + tof_to);
 
                 if time + tof_to + tof_back > problem.mission_time {
-                    i += 1;  // Continue checking if other debris can be visited 
+                    i += 1; // Continue checking if other debris can be visited
                     continue;
                 }
 
@@ -89,16 +84,20 @@ impl Generator {
             sequences.push(seq);
 
             // Break if all chasers have been used
-            if sequences.len() >= problem.max_chasers { break; }
+            if sequences.len() >= problem.max_chasers {
+                break;
+            }
         }
 
         // If there are unassigned debris, dump all of them into the last chaser
         // route and re-evaluate it (the solution will be infeasible)
         if !remaining.is_empty() {
             let last = sequences.last_mut().unwrap();
-            let depot = last.indices.pop().unwrap();    // remove trailing depot
-            for &node in &remaining { last.indices.push(node); }
-            last.indices.push(depot);                   // add back depot
+            let depot = last.indices.pop().unwrap(); // remove trailing depot
+            for &node in &remaining {
+                last.indices.push(node);
+            }
+            last.indices.push(depot); // add back depot
             last.evaluate(problem, oracle);
             remaining.clear();
         }
@@ -112,14 +111,9 @@ impl Generator {
     }
 
     /// Generate an solution using a greedy nearest-neighbor heuristic
-    fn greedy_solution(
-        &self,
-        problem: &Problem,
-        oracle: &Oracle,
-        rng: &mut SmallRng,
-    ) -> Solution {
+    fn greedy_solution(&self, problem: &Problem, oracle: &Oracle, rng: &mut SmallRng) -> Solution {
         let n = problem.states.len();
-        
+
         // All debris state indices, except chaser start state at index 0
         let mut available = vec![true; n];
         available[0] = false;
@@ -127,7 +121,8 @@ impl Generator {
         // Sort nodes by distance to depot
         let mut sorted_indices: Vec<usize> = (1..n).collect();
         sorted_indices.sort_by(|&a, &b| {
-            oracle.distance(&problem.states[0], &problem.states[a])
+            oracle
+                .distance(&problem.states[0], &problem.states[a])
                 .partial_cmp(&oracle.distance(&problem.states[0], &problem.states[b]))
                 .unwrap()
         });
@@ -143,35 +138,46 @@ impl Generator {
         let mut sequences: Vec<Sequence> = Vec::new();
 
         for &start_index in &sorted_indices {
-            
-            if !available[start_index] { continue; }
+            if !available[start_index] {
+                continue;
+            }
 
             // Break if all chasers have been used
-            if sequences.len() >= problem.max_chasers { break; }
+            if sequences.len() >= problem.max_chasers {
+                break;
+            }
 
             available[start_index] = false;
             let mut indices = vec![0, start_index];
-            let (_, mut time) = oracle.evaluate(&problem.states[0], &problem.states[start_index], 0.0);
+            let (_, mut time) =
+                oracle.evaluate(&problem.states[0], &problem.states[start_index], 0.0);
             let mut load = 1usize;
 
             // Greedily extend the route with nearest feasible neighbor
             loop {
-
                 // Check load constraint (whether one more debris can be visited)
-                if load >= problem.max_load { break; }
+                if load >= problem.max_load {
+                    break;
+                }
 
                 let current = *indices.last().unwrap();
                 let mut best_index: Option<usize> = None;
                 let mut best_cost = f64::MAX;
 
                 for &node in &sorted_indices {
-                    if !available[node] { continue; }
+                    if !available[node] {
+                        continue;
+                    }
 
                     // Check time constraint (whether we can go to debris and return to depot)
-                    let (fuel, tof) = oracle.evaluate(&problem.states[current], &problem.states[node], time);
-                    let (_, tof_back) = oracle.evaluate(&problem.states[node], &problem.states[0], time + tof);
-                    if time + tof + tof_back > problem.mission_time { continue; }
-                    
+                    let (fuel, tof) =
+                        oracle.evaluate(&problem.states[current], &problem.states[node], time);
+                    let (_, tof_back) =
+                        oracle.evaluate(&problem.states[node], &problem.states[0], time + tof);
+                    if time + tof + tof_back > problem.mission_time {
+                        continue;
+                    }
+
                     // Update best candidate
                     if fuel < best_cost {
                         best_index = Some(node);
@@ -183,7 +189,8 @@ impl Generator {
                 match best_index {
                     Some(node) => {
                         available[node] = false;
-                        let (_, tof) = oracle.evaluate(&problem.states[current], &problem.states[node], time);
+                        let (_, tof) =
+                            oracle.evaluate(&problem.states[current], &problem.states[node], time);
                         time += tof;
                         load += 1;
                         indices.push(node);
@@ -205,9 +212,11 @@ impl Generator {
         let unassigned: Vec<usize> = (1..n).filter(|&i| available[i]).collect();
         if !unassigned.is_empty() {
             let last = sequences.last_mut().unwrap();
-            let depot = last.indices.pop().unwrap();    // remove trailing depot
-            for &node in &unassigned { last.indices.push(node); }
-            last.indices.push(depot);                   // add back depot
+            let depot = last.indices.pop().unwrap(); // remove trailing depot
+            for &node in &unassigned {
+                last.indices.push(node);
+            }
+            last.indices.push(depot); // add back depot
             last.evaluate(problem, oracle);
         }
 
@@ -221,15 +230,18 @@ impl Generator {
 
     /// Generate an initial solution for the population
     fn generate_solution(
-        &self, 
+        &self,
         problem: &Problem,
         oracle: &Oracle,
-        rng: &mut SmallRng
+        rng: &mut SmallRng,
     ) -> Solution {
-        match self.generation_method.as_str() {
+        match self.params.generation_method.as_str() {
             "random" => self.random_solution(problem, oracle, rng),
             "greedy" => self.greedy_solution(problem, oracle, rng),
-            _ => panic!("Unknown population initialization method: {}", self.generation_method),
+            _ => panic!(
+                "Unknown population initialization method: {}",
+                self.params.generation_method
+            ),
         }
     }
 
@@ -243,14 +255,12 @@ impl Generator {
         population: &mut Population,
         search: &Search,
         polish: &Polisher,
-        rng: &mut SmallRng
+        rng: &mut SmallRng,
     ) {
-        for _ in 0..self.pop_init {
+        for _ in 0..self.params.pop_init {
             let mut solution = self.generate_solution(problem, oracle, rng);
             search.run(&mut solution, problem, oracle, metric, rng);
-            if solution.is_feasible() && polish.polish_condition == "feasible" {
-                polish.polish(&mut solution, problem, oracle, metric);
-            }
+            polish.polish(&mut solution, "feasible", problem, oracle, metric);
             population.add(solution, metric);
         }
     }

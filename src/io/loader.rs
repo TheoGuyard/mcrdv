@@ -1,6 +1,5 @@
-use std::fs;
 use crate::orbit::State;
-
+use std::fs;
 
 const HEADER: &str = "a[m],e[prop],i[rad],Omega[rad],omega[rad],theta[rad]";
 
@@ -19,37 +18,39 @@ const HEADER: &str = "a[m],e[prop],i[rad],Omega[rad],omega[rad],theta[rad]";
 pub struct Loader;
 
 impl Loader {
-    
     pub fn load(path: &str) -> Vec<State> {
-
         // Check if file exists
         if !std::path::Path::new(path).exists() {
             panic!("File not found: {}", path);
         }
-        
+
         let file = fs::read_to_string(path).unwrap();
         let mut lines = file.lines();
-        
+
         // Check header format
         let line = lines.next();
-        if line.is_none() { panic!("Empty file: {}", path); }
-        if line.unwrap() != HEADER { panic!("Invalid header: expected '{}'", HEADER); }
+        if line.is_none() {
+            panic!("Empty file: {}", path);
+        }
+        if line.unwrap() != HEADER {
+            panic!("Invalid header: expected '{}'", HEADER);
+        }
 
         // Load debris states
-        let mut states : Vec<State> = Vec::new();
+        let mut states: Vec<State> = Vec::new();
         for line in lines {
             let elems: Vec<&str> = line.split(',').collect();
-            let values: Vec<f64> = elems.iter()
-                .map(|x| x.parse::<f64>().unwrap())
-                .collect();
-            if values.len() != 6 { panic!("Invalid state line: {}", line); }
+            let values: Vec<f64> = elems.iter().map(|x| x.parse::<f64>().unwrap()).collect();
+            if values.len() != 6 {
+                panic!("Invalid state line: {}", line);
+            }
             let state = State {
                 a: values[0],
                 e: values[1],
                 i: values[2],
                 O: values[3],
                 o: values[4],
-                t: values[5]
+                t: values[5],
             };
             states.push(state);
         }

@@ -1,10 +1,13 @@
 on: push
-name: Lint
+name: Clippy
+
+env:
+  RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  lint:
+  clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Run clippy
-        run: cargo fmt --all -- --check
+        run: cargo clippy --all-targets --all-features

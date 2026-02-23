@@ -1,9 +1,10 @@
 mod common;
 
+use std::fs;
+
 use common::{default_oracle, make_test_debris, relaxed_problem};
 use scorpion::io::{Loader, Writer};
 use scorpion::optim::Solver;
-use std::fs;
 
 #[test]
 fn test_loader_iridium_csv() {
@@ -23,7 +24,10 @@ fn test_loader_iridium_csv() {
 #[test]
 fn test_loader_ordc_csv() {
     let states = Loader::load("data/ordc.csv");
-    assert!(!states.is_empty(), "Should load at least one debris from ordc.csv");
+    assert!(
+        !states.is_empty(),
+        "Should load at least one debris from ordc.csv"
+    );
 }
 
 #[test]
@@ -37,8 +41,8 @@ fn test_writer_roundtrip() {
     let debris = make_test_debris(3);
     let problem = relaxed_problem(&debris);
     let oracle = default_oracle();
-    let mut solver = Solver::preset(0, 5.0, 42);
-    let sol = solver.solver(&problem, &oracle);
+    let mut solver = Solver::preset(0);
+    let (sol, _) = solver.solve(&problem, &oracle);
 
     let path = "target/tmp/test_output.txt";
     fs::create_dir_all("target/tmp").unwrap();

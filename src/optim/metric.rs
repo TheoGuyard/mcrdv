@@ -1,12 +1,12 @@
-use crate::optim::solution::Solution;
 use crate::optim::sequence::Sequence;
+use crate::optim::solution::Solution;
 use crate::problem::Problem;
 
-
-/// Metric to compare two different solutions (feasible or infeasible)
-pub struct Metric {
-    /// Load violation penalty value
-    pub penalty_load: f64,
+/// Parameters for Metric operator
+#[derive(Clone)]
+pub struct MetricParams {
+    /// Load violation penalty initial value
+    pub penalty_load_init: f64,
     /// Load violation penalty increase factor
     pub penalty_load_increase: f64,
     /// Load violation penalty decrease factor
@@ -15,9 +15,8 @@ pub struct Metric {
     pub penalty_load_min: f64,
     /// Load violation penalty maximum value
     pub penalty_load_max: f64,
-    
-    /// Time violation penalty value
-    pub penalty_time: f64,
+    /// Time violation penalty initial value
+    pub penalty_time_init: f64,
     /// Time violation penalty increase factor
     pub penalty_time_increase: f64,
     /// Time violation penalty decrease factor
@@ -26,39 +25,25 @@ pub struct Metric {
     pub penalty_time_min: f64,
     /// Time violation penalty maximum value
     pub penalty_time_max: f64,
-    
-    /// Target fraction of feasible solutions for penalty adaptation
+    /// Target ratio of feasible solutions for penalty adaptations
     pub target_ratio: f64,
 }
 
-impl Metric {
+/// Metric to compare two different solutions (feasible or infeasible)
+pub struct Metric {
+    pub params: MetricParams,
+    pub penalty_load: f64,
+    pub penalty_time: f64,
+}
 
-    #![allow(clippy::too_many_arguments)]
-    pub fn new(
-        penalty_load: f64,
-        penalty_load_increase: f64,
-        penalty_load_decrease: f64,
-        penalty_load_min: f64,
-        penalty_load_max: f64,
-        penalty_time: f64,
-        penalty_time_increase: f64,
-        penalty_time_decrease: f64,
-        penalty_time_min: f64,
-        penalty_time_max: f64,
-        target_ratio: f64
-    ) -> Self {
+impl Metric {
+    pub fn new(params: MetricParams) -> Self {
+        let penalty_load = params.penalty_load_init;
+        let penalty_time = params.penalty_time_init;
         Self {
+            params,
             penalty_load,
-            penalty_load_increase,
-            penalty_load_decrease,
-            penalty_load_min,
-            penalty_load_max,
             penalty_time,
-            penalty_time_increase,
-            penalty_time_decrease,
-            penalty_time_min,
-            penalty_time_max,
-            target_ratio,
         }
     }
 
@@ -116,34 +101,36 @@ impl Metric {
     }
 
     /// Adapt penalties based on the fraction of feasible solutions
-    pub fn adapt_penalties(
-        &mut self,
-        frac_load_feasible: f64,
-        frac_time_feasible: f64
-    ) {
+    pub fn adapt_penalties(&mut self, frac_load_feasible: f64, frac_time_feasible: f64) {
         // Load penalty
-        if frac_load_feasible < self.target_ratio {
-            self.penalty_load *= self.penalty_load_increase;
+        if frac_load_feasible < self.params.target_ratio {
+            self.penalty_load *= self.params.penalty_load_increase;
         } else {
-            self.penalty_load *= self.penalty_load_decrease;
+            self.penalty_load *= self.params.penalty_load_decrease;
         }
-        self.penalty_load = self.penalty_load.clamp(self.penalty_load_min, self.penalty_load_max);
+        self.penalty_load = self
+            .penalty_load
+            .clamp(self.params.penalty_load_min, self.params.penalty_load_max);
 
         // Time penalty
-        if frac_time_feasible < self.target_ratio {
-            self.penalty_time *= self.penalty_time_increase;
+        if frac_time_feasible < self.params.target_ratio {
+            self.penalty_time *= self.params.penalty_time_increase;
         } else {
-            self.penalty_time *= self.penalty_time_decrease;
+            self.penalty_time *= self.params.penalty_time_decrease;
         }
-        self.penalty_time = self.penalty_time.clamp(self.penalty_time_min, self.penalty_time_max);
+        self.penalty_time = self
+            .penalty_time
+            .clamp(self.params.penalty_time_min, self.params.penalty_time_max);
     }
 
     /// Broken-pairs distance between two solutions
     pub fn broken_pairs_distance(a: &Solution, b: &Solution) -> f64 {
         debug_assert_eq!(a.pred.len(), b.pred.len());
-        
+
         let num_debris = a.pred.len() - 1;
-        if num_debris == 0 { return 0.0; }
+        if num_debris == 0 {
+            return 0.0;
+        }
 
         let mut differences = 0usize;
         for j in 1..=num_debris {

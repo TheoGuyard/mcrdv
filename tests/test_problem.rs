@@ -1,5 +1,5 @@
-use scorpion::orbit::State;
 use scorpion::Problem;
+use scorpion::orbit::State;
 
 fn make_test_debris(n: usize) -> Vec<State> {
     assert!(n <= 10);
@@ -23,13 +23,7 @@ fn make_test_debris(n: usize) -> Vec<State> {
 #[test]
 fn test_problem_new_barycenter() {
     let debris = make_test_debris(4);
-    let problem = Problem::new(
-        &debris,
-        "barycenter".to_string(),
-        4,
-        4,
-        1e8,
-    );
+    let problem = Problem::new(&debris, "barycenter".to_string(), 4, 4, 1e8);
     // states[0] is the barycenter, states[1..] are the debris
     assert_eq!(problem.states.len(), 5);
 
@@ -43,13 +37,7 @@ fn test_problem_new_barycenter() {
 #[test]
 fn test_problem_stores_parameters() {
     let debris = make_test_debris(3);
-    let problem = Problem::new(
-        &debris,
-        "barycenter".to_string(),
-        5,
-        10,
-        3.15e7,
-    );
+    let problem = Problem::new(&debris, "barycenter".to_string(), 5, 10, 3.15e7);
     assert_eq!(problem.max_chasers, 5);
     assert_eq!(problem.max_load, 10);
     assert_eq!(problem.mission_time, 3.15e7);
@@ -61,24 +49,12 @@ fn test_problem_stores_parameters() {
 fn test_problem_panics_on_insufficient_capacity() {
     let debris = make_test_debris(5);
     // 2 chasers * 2 load = 4 < 5 debris  → should panic
-    let _ = Problem::new(
-        &debris,
-        "barycenter".to_string(),
-        2,
-        2,
-        1e8,
-    );
+    let _ = Problem::new(&debris, "barycenter".to_string(), 2, 2, 1e8);
 }
 
 #[test]
 #[should_panic(expected = "Invalid chaser start option")]
 fn test_problem_panics_on_invalid_chaser_start() {
     let debris = make_test_debris(3);
-    let _ = Problem::new(
-        &debris,
-        "invalid_method".to_string(),
-        5,
-        5,
-        1e8,
-    );
+    let _ = Problem::new(&debris, "invalid_method".to_string(), 5, 5, 1e8);
 }

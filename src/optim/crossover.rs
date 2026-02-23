@@ -2,47 +2,45 @@ use rand::Rng;
 use rand::rngs::SmallRng;
 use std::cmp::min;
 
-use crate::optim::solution::Solution;
 use crate::optim::metric::Metric;
 use crate::optim::population::Population;
 use crate::optim::sequence::Sequence;
+use crate::optim::solution::Solution;
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
+/// Parameters for Crossover operator
+#[derive(Clone)]
+pub struct CrossoverParams {
+    /// Number of solutions to consider for parent tournament selection
+    pub nb_pick: usize,
+    /// Factor to relax load constraint for split dynamic programming pruning
+    pub load_threshold_factor: f64,
+    /// Factor to relax time constraint for split dynamic programming pruning
+    pub time_threshold_factor: f64,
+}
 
 /// Crossover operator based on giant-tour representation
 pub struct Crossover {
-    /// Number of solutions to consider for parent tournament selection
-    nb_pick: usize,
-    /// Factor to relax load constraint for split dynamic programming pruning
-    load_threshold_factor: f64,
-    /// Factor to relax time constraint for split dynamic programming pruning
-    time_threshold_factor: f64,
+    pub params: CrossoverParams,
 }
 
 impl Crossover {
-    pub fn new(
-        nb_pick: usize,
-        load_threshold_factor: f64,
-        time_threshold_factor: f64,
-    ) -> Self {
-        Self {
-            nb_pick,
-            load_threshold_factor,
-            time_threshold_factor,
-        }
+    pub fn new(params: CrossoverParams) -> Self {
+        Self { params }
     }
 
     /// Build a giant tour flattening an solution, ordering all sequences by
     /// their average RAAN. Within each sequence, debris indices appear in
     /// their visit order.
     fn build_giant_tour(&self, problem: &Problem, sol: &Solution) -> Vec<usize> {
-        
         // For each sequence: (average RAAN, sequence index)
         let mut keys: Vec<(f64, usize)> = Vec::new();
-        
+
         for (i, seq) in sol.sequences.iter().enumerate() {
-            if seq.is_empty() { continue; }
+            if seq.is_empty() {
+                continue;
+            }
             let mut raan = 0.0;
             let mut nseq = 0usize;
             for &idx in &seq.indices[1..seq.indices.len() - 1] {
@@ -79,7 +77,6 @@ impl Crossover {
         giant: &[usize],
         k_goal: usize,
     ) -> Vec<Sequence> {
-        
         let n = giant.len();
         let k = k_goal; // number of sequences to split into
 
@@ -95,17 +92,19 @@ impl Crossover {
 
         // pred[s][j] = index i of last split point for best solution in memo[s][j]
         let mut pred = vec![vec![0usize; n + 1]; k + 1];
-        
+
         memo[0][0] = 0.0;
 
         // Constraint thresholds to prune infeasible sequences and reduce search space
-        let load_threshold = (self.load_threshold_factor * problem.max_load as f64) as usize;
-        let time_threshold = self.time_threshold_factor * problem.mission_time;
+        let load_threshold = (self.params.load_threshold_factor * problem.max_load as f64) as usize;
+        let time_threshold = self.params.time_threshold_factor * problem.mission_time;
 
         for s in 1..=k {
             for i in (s - 1)..n {
                 let base = memo[s - 1][i];
-                if base >= inf { continue; }
+                if base >= inf {
+                    continue;
+                }
 
                 // Build candidate depot -> giant[i] -> giant[i+1] -> ... -> depot
                 let mut seq = Sequence::open();
@@ -126,8 +125,12 @@ impl Crossover {
                     seq.pop_last();
 
                     // Prune if constraints are violated above pruning thresholds
-                    if seq.load > load_threshold { break; }
-                    if seq.time > time_threshold { break; }
+                    if seq.load > load_threshold {
+                        break;
+                    }
+                    if seq.time > time_threshold {
+                        break;
+                    }
                 }
             }
         }
@@ -185,15 +188,9 @@ impl Crossover {
     }
 
     /// Order crossover (OX) on two giant tours
-    fn crossover_ox(
-        &self,
-        parent1: &[usize],
-        parent2: &[usize],
-        rng: &mut SmallRng,
-    ) -> Vec<usize> {
-
+    fn crossover_ox(&self, parent1: &[usize], parent2: &[usize], rng: &mut SmallRng) -> Vec<usize> {
         let n = parent1.len();
-        
+
         debug_assert!(n > 1);
         debug_assert_eq!(n, parent2.len());
 
@@ -217,7 +214,9 @@ impl Crossover {
             child[pos] = idx;
             added[idx] = true;
             j += 1;
-            if j % n == stop { break; }
+            if j % n == stop {
+                break;
+            }
         }
 
         // Fill remaining indices from parent2 in order, skipping already used ones
@@ -240,12 +239,11 @@ impl Crossover {
         oracle: &Oracle,
         metric: &Metric,
         population: &Population,
-        rng: &mut SmallRng
+        rng: &mut SmallRng,
     ) -> Solution {
-
         // Select two parents (clone to release borrow on population)
-        let p1 = population.pick(self.nb_pick, rng).clone();
-        let p2 = population.pick(self.nb_pick, rng).clone();
+        let p1 = population.pick(self.params.nb_pick, rng).clone();
+        let p2 = population.pick(self.params.nb_pick, rng).clone();
 
         // Extract giant tours
         let t1 = self.build_giant_tour(problem, &p1);
@@ -257,18 +255,10 @@ impl Crossover {
 
         // Perform crossover on giant tours
         let tour = self.crossover_ox(&t1, &t2, rng);
-        
+
         // Split back the giant tour into sequences for the solution
-        let sequences = self.split_giant_tour(
-            problem, 
-            oracle,
-            metric,
-            &tour,
-            k_goal, 
-        );
+        let sequences = self.split_giant_tour(problem, oracle, metric, &tour, k_goal);
 
         Solution::new(problem, sequences)
     }
 }
-
-

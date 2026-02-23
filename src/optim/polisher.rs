@@ -4,62 +4,69 @@ use crate::optim::solution::Solution;
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
-/// Polishing operator for meeting times in solutions
-pub struct Polisher {
-    /// When to polish solutions
-    /// - "none": no polishing
+/// Parameters for Polisher operator
+#[derive(Clone)]
+pub struct PolisherParams {
+    /// When to polish solutions:
+    /// - "never": no polishing
     /// - "feasible": polish all feasible solutions created
-    /// - "best": polish last best solution among all iterations
+    /// - "last": polish last best solution among all iterations
     pub polish_condition: String,
-    /// Method to polish solutions
+    /// Method to polish solutions:
     /// - "dp": dynamic programming on time grid
     pub polish_method: String,
     /// Time step in dynamic-programming polishing method
     pub dp_time_step: f64,
 }
 
+/// Polishing operator for meeting times in solutions
+pub struct Polisher {
+    pub params: PolisherParams,
+}
+
 impl Polisher {
-    /// Instantiate new polisher
-    pub fn new(
-        polish_condition: String,
-        polish_method: String,
-        dp_time_step: f64
-    ) -> Self {
-        Self { polish_condition, polish_method, dp_time_step }
+    pub fn new(params: PolisherParams) -> Self {
+        Self { params }
     }
 
     /// Polish meeting times in a solution
     pub fn polish(
         &self,
         solution: &mut Solution,
+        condition: &str,
         problem: &Problem,
         oracle: &Oracle,
         metric: &Metric,
     ) {
-        if !metric.is_feasible(solution) { return; }
+        if !metric.is_feasible(solution) {
+            return;
+        }
+        if condition != self.params.polish_condition {
+            return;
+        }
         let mut improved = false;
         for sequence in &mut solution.sequences {
-            if sequence.is_empty() { continue; }
-            improved |= match self.polish_method.as_str() {
+            if sequence.is_empty() {
+                continue;
+            }
+            improved |= match self.params.polish_method.as_str() {
                 "dp" => self.polish_dp(sequence, problem, oracle),
-                _ => panic!("Unknown polish method: {}", self.polish_method),
+                _ => panic!("Unknown polish method: {}", self.params.polish_method),
             };
         }
-        if improved { solution.recompute_metrics(problem); }
+        if improved {
+            solution.recompute_metrics(problem);
+        }
     }
 
     /// Polish meeting times of a sequence using dynamic programming.
-    fn polish_dp(
-        &self,
-        seq: &mut Sequence,
-        problem: &Problem,
-        oracle: &Oracle,
-    ) -> bool {
-
+    fn polish_dp(&self, seq: &mut Sequence, problem: &Problem, oracle: &Oracle) -> bool {
         let n = seq.len();
-        if n <= 2 { return false; }
+        if n <= 2 {
+            return false;
+        }
 
-        let dt = self.dp_time_step;
+        let dt = self.params.dp_time_step;
         let max_time = problem.mission_time;
         let num_steps = (max_time / dt).floor() as usize + 1;
 
@@ -68,7 +75,7 @@ impl Polisher {
 
         // memo[i][k] = minimum cum. cost to reach debris i at time step k
         let mut memo = vec![vec![f64::INFINITY; num_steps]; n];
-        
+
         // back[i][l] = departure time step k at debris i-1
         let mut back = vec![vec![usize::MAX; num_steps]; n];
 
@@ -82,18 +89,21 @@ impl Polisher {
 
             for k in 0..num_steps {
                 let cost_so_far = memo[i][k];
-                if cost_so_far.is_infinite() { continue; }      // pruning: unreachable
-                if cost_so_far >= initial_cost { continue; }  // pruning: can't improve
+                if cost_so_far.is_infinite() {
+                    continue;
+                } // pruning: unreachable
+                if cost_so_far >= initial_cost {
+                    continue;
+                } // pruning: can't improve
 
                 let t_depart = k as f64 * dt;
-                let (cost, min_time) = oracle.evaluate(
-                    &problem.states[src_idx],
-                    &problem.states[dst_idx],
-                    t_depart,
-                );
+                let (cost, min_time) =
+                    oracle.evaluate(&problem.states[src_idx], &problem.states[dst_idx], t_depart);
 
                 let l_min = ((t_depart + min_time) / dt).ceil() as usize;
-                if l_min >= num_steps { continue; } // pruning: arrival out of range
+                if l_min >= num_steps {
+                    continue;
+                } // pruning: arrival out of range
 
                 let new_cost = cost_so_far + cost;
                 if new_cost < memo[i + 1][l_min] {
@@ -119,14 +129,18 @@ impl Polisher {
         let mut best_step = usize::MAX;
         let mut best_cost = f64::INFINITY;
         for (step, cost) in memo[n - 1].iter().enumerate() {
-            if cost.is_infinite() { continue; }
+            if cost.is_infinite() {
+                continue;
+            }
             if *cost < best_cost {
                 best_cost = *cost;
                 best_step = step;
             }
         }
 
-        if best_step == usize::MAX { return false; }  // no reachable DP state
+        if best_step == usize::MAX {
+            return false;
+        } // no reachable DP state
 
         // Backtrack to recover optimal departure time steps at each position
         let mut opt_steps = vec![0usize; n];

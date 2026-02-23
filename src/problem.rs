@@ -10,7 +10,7 @@ pub struct Problem {
     /// Chaser starting position
     /// - "barycenter": all chasers start at the barycenter of debris
     pub chaser_start: String,
-    
+
     /// Maximum number of chasers available
     pub max_chasers: usize,
 
@@ -29,7 +29,6 @@ impl Problem {
         max_load: usize,
         mission_time: f64,
     ) -> Self {
-
         // Sanity checks
         if debris.len() > max_chasers * max_load {
             panic!(
@@ -54,9 +53,8 @@ impl Problem {
                 };
                 states.insert(0, chaser);
             }
-            _ => panic!("Invalid chaser start option: {}", chaser_start)
+            _ => panic!("Invalid chaser start option: {}", chaser_start),
         }
-
 
         Self {
             states,
