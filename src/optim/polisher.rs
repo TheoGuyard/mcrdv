@@ -6,7 +6,13 @@ use crate::problem::Problem;
 
 /// Polishing operator for meeting times in solutions
 pub struct Polisher {
-    /// Method to polish solutions ("none" or "dp")
+    /// When to polish solutions
+    /// - "none": no polishing
+    /// - "feasible": polish all feasible solutions created
+    /// - "best": polish last best solution among all iterations
+    pub polish_condition: String,
+    /// Method to polish solutions
+    /// - "dp": dynamic programming on time grid
     pub polish_method: String,
     /// Time step in dynamic-programming polishing method
     pub dp_time_step: f64,
@@ -14,8 +20,12 @@ pub struct Polisher {
 
 impl Polisher {
     /// Instantiate new polisher
-    pub fn new(polish_method: String, dp_time_step: f64) -> Self {
-        Self { polish_method, dp_time_step }
+    pub fn new(
+        polish_condition: String,
+        polish_method: String,
+        dp_time_step: f64
+    ) -> Self {
+        Self { polish_condition, polish_method, dp_time_step }
     }
 
     /// Polish meeting times in a solution
@@ -31,7 +41,6 @@ impl Polisher {
         for sequence in &mut solution.sequences {
             if sequence.is_empty() { continue; }
             improved |= match self.polish_method.as_str() {
-                "none" => false,
                 "dp" => self.polish_dp(sequence, problem, oracle),
                 _ => panic!("Unknown polish method: {}", self.polish_method),
             };

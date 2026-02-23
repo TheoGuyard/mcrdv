@@ -78,6 +78,7 @@ impl Solver {
         );
 
         let polisher = Polisher::new(
+            params.polish_condition.clone(),
             params.polish_method.clone(),
             params.dp_time_step,
         );
@@ -120,6 +121,7 @@ impl Solver {
             &mut self.metric, 
             &mut self.population,
             &self.search,
+            &self.polisher,
             &mut rng
         );
 
@@ -164,6 +166,11 @@ impl Solver {
                 &mut rng
             );
 
+            // Polish solution if condition is met
+            if solution.is_feasible() && self.params.polish_condition == "feasible" {
+                self.polisher.polish(&mut solution, problem, oracle, &self.metric);
+            }
+
             // Add new solution to population
             self.population.add(solution, &mut self.metric);
 
@@ -184,6 +191,10 @@ impl Solver {
             }
         }
 
+        if best.is_feasible() && self.params.polish_condition == "best" {
+            self.polisher.polish(&mut best, problem, oracle, &self.metric);
+        }
+
         self.print_tail(iter, t0);
 
         if !best.is_feasible() {
@@ -191,17 +202,6 @@ impl Solver {
                 "Warning: Final population is infeasible. Consider relaxing \
                 problem constraints or adapting penalties."
             );
-        }
-
-        // Polish best solution
-        if best.is_feasible() && self.params.polish_method != "none" {
-            println!();
-            println!("Polishing best solution...");
-            println!("Before polishing: cost = {:.2}", best.total_cost);
-            let t0_polish = Instant::now();
-            self.polisher.polish(&mut best, problem, oracle, &self.metric);
-            println!("After polishing : cost = {:.2}", best.total_cost);
-            println!("Polishing time  : {:.4} seconds", t0_polish.elapsed().as_secs_f64());
         }
 
         best
