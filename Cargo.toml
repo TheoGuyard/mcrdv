@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+csv = { version = "1.4.0" }
 rand = { version = "0.8", features = ["small_rng"] }
+serde = { version = "1.0.228", features = ["derive"] }
 
 [profile.release]
 debug = 1

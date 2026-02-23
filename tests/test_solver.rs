@@ -124,7 +124,7 @@ fn test_solver_time_limit_respected() {
 #[test]
 fn test_solver_on_real_data_iridium_small() {
     // Use a subset of the real Iridium constellation data
-    let all_debris = Loader::load("data/iridium.csv");
+    let all_debris = Loader::load("data/iridium33.csv");
     let debris: Vec<State> = all_debris.into_iter().take(10).collect();
     let problem = Problem::new(
         &debris,
