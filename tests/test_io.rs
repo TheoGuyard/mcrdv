@@ -7,11 +7,11 @@ use scorpion::io::{Loader, Writer};
 use scorpion::optim::Solver;
 
 #[test]
-fn test_loader_iridium_csv() {
-    let states = Loader::load("data/iridium.csv");
+fn test_loader() {
+    let states = Loader::load("data/ordc.csv");
     assert!(
         !states.is_empty(),
-        "Should load at least one debris from iridium.csv"
+        "Should load at least one debris from ordc.csv"
     );
     // Check that values are physically reasonable
     for s in &states {
@@ -19,15 +19,6 @@ fn test_loader_iridium_csv() {
         assert!(s.e >= 0.0 && s.e < 1.0, "Eccentricity out of range");
         assert!(s.i >= 0.0, "Inclination should be non-negative");
     }
-}
-
-#[test]
-fn test_loader_ordc_csv() {
-    let states = Loader::load("data/ordc.csv");
-    assert!(
-        !states.is_empty(),
-        "Should load at least one debris from ordc.csv"
-    );
 }
 
 #[test]

@@ -5,7 +5,7 @@ use scorpion::orbit::Oracle;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load debris from input file
-    let debris = Loader::load("data/iridium.csv");
+    let debris = Loader::load("data/iridium33.csv");
 
     // Set problem data
     let problem = Problem::new(
