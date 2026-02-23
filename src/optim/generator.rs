@@ -3,6 +3,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::optim::metric::Metric;
+use crate::optim::polisher::Polisher;
 use crate::optim::population::Population;
 use crate::optim::search::Search;
 use crate::optim::sequence::Sequence;
@@ -240,11 +241,15 @@ impl Generator {
         metric: &mut Metric,
         population: &mut Population,
         search: &Search,
+        polish: &Polisher,
         rng: &mut SmallRng
     ) {
         for _ in 0..self.pop_init {
             let mut solution = self.generate_solution(problem, oracle, rng);
             search.run(&mut solution, problem, oracle, metric, rng);
+            if solution.is_feasible() && polish.polish_condition == "feasible" {
+                polish.polish(&mut solution, problem, oracle, metric);
+            }
             population.add(solution, metric);
         }
     }

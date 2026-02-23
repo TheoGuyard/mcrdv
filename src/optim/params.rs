@@ -103,7 +103,14 @@ pub struct Params {
 
     // ===== Polisher parameters
 
-    /// Method to polish solutions ("none" or "dp")
+    /// When to polish solutions
+    /// - "none": no polishing
+    /// - "feasible": polish all feasible solutions created
+    /// - "best": polish last best solution among all iterations
+    pub polish_condition: String,
+
+    /// Method to polish solutions
+    /// - "dp": dynamic programming on time grid
     pub polish_method: String,
     
     /// Time step in dynamic-programming polishing method
@@ -148,6 +155,7 @@ impl Params {
             // Local search parameters
             nb_neighbors                : 30,
             // Polisher parameters
+            polish_condition            : "feasible".to_string(),
             polish_method               : "dp".to_string(),
             dp_time_step                : 86_400.0,
         }
