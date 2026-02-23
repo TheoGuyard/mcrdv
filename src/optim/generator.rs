@@ -234,6 +234,7 @@ impl Generator {
     }
 
     /// Generate an initial population of solutions
+    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         &self,
         problem: &Problem,
