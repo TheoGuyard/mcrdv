@@ -1,13 +1,25 @@
-use rand::rngs::SmallRng;
 use rand::Rng;
+use rand::rngs::SmallRng;
 use std::collections::VecDeque;
 
-use crate::optim::solution::Solution;
 use crate::optim::metric::Metric;
+use crate::optim::solution::Solution;
 
-
-/// Constants for clone detection in survivor selection
-const CLONE_EPS: f64 = 1e-6;
+#[derive(Clone)]
+pub struct PopulationParams {
+    /// Minimum population size after survival selection
+    pub pop_min: usize,
+    /// Maximum population size until survival selection
+    pub pop_max: usize,
+    /// Number of closest solutions used for diversity measurement
+    pub nb_close: usize,
+    /// Number of elite solutions preserved during survival selection
+    pub nb_elite: usize,
+    /// Number of insertions before penalty adaptation
+    pub adapt_iter: usize,
+    /// Threshold for clone detection in survivor selection
+    pub clone_eps: f64,
+}
 
 /// Feasible or infeasible subpopulation with score and diversity metrics
 #[derive(Default)]
@@ -30,6 +42,8 @@ impl Subpopulation {
 
 /// Population of solutions with insertion and survival selection mechanisms
 pub struct Population {
+    /// Parameters
+    pub params: PopulationParams,
     /// Feasible solutions
     pub feasible: Subpopulation,
     /// Infeasible solutions
@@ -38,43 +52,21 @@ pub struct Population {
     pub load_window: VecDeque<bool>,
     /// Rolling window of time feasibility status for new solutions
     pub time_window: VecDeque<bool>,
-
-    /// Minimum population size after survival selection
-    pub pop_min: usize,
-    /// Maximum population size until survival selection
-    pub pop_max: usize,
-    /// Number of closest solutions used for diversity measurement
-    pub nb_close: usize,
-    /// Number of elite solutions preserved during survival selection
-    pub nb_elite: usize,
-    /// Number of insertions before penalty adaptation
-    pub adapt_iter: usize,
 }
 
 impl Population {
-    pub fn new(
-        pop_min: usize,
-        pop_max: usize,
-        nb_close: usize,
-        nb_elite: usize,
-        adapt_iter: usize,
-    ) -> Self {
+    pub fn new(params: PopulationParams) -> Self {
         Self {
+            params,
             feasible: Subpopulation::new(),
             infeasible: Subpopulation::new(),
             load_window: VecDeque::new(),
             time_window: VecDeque::new(),
-            pop_min,
-            pop_max,
-            nb_close,
-            nb_elite,
-            adapt_iter,
         }
     }
 
     /// Add solution to population
     pub fn add(&mut self, sol: Solution, metric: &mut Metric) {
-        
         // Select appropriate subpopulation
         let sub = if sol.is_feasible() {
             &mut self.feasible
@@ -91,46 +83,55 @@ impl Population {
         sub.solutions.push(sol);
         Self::update_proxi(sub, idx);
         Self::update_order(sub, metric);
-        Self::update_score(sub, self.nb_close, self.nb_elite);
+        Self::update_score(sub, self.params.nb_close, self.params.nb_elite);
 
         // Trigger survivor selection
-        if sub.solutions.len() > self.pop_max {
-            Self::survivors_selection(sub, metric, self.pop_min, self.nb_close, self.nb_elite);
+        if sub.solutions.len() > self.params.pop_max {
+            Self::survivors_selection(
+                sub,
+                metric,
+                self.params.pop_min,
+                self.params.nb_close,
+                self.params.nb_elite,
+                self.params.clone_eps,
+            );
         }
 
         // Trigger penalty adaptation and reorder subpopulations
         debug_assert_eq!(self.load_window.len(), self.time_window.len());
-        if self.load_window.len().is_multiple_of(self.adapt_iter) {
+        if self
+            .load_window
+            .len()
+            .is_multiple_of(self.params.adapt_iter)
+        {
             let frac_load_feasible = self
                 .load_window
                 .iter()
                 .rev()
-                .take(self.adapt_iter)
+                .take(self.params.adapt_iter)
                 .filter(|&&b| b)
                 .count() as f64
-                / self.adapt_iter as f64;
+                / self.params.adapt_iter as f64;
             let frac_time_feasible = self
                 .time_window
                 .iter()
                 .rev()
-                .take(self.adapt_iter)
+                .take(self.params.adapt_iter)
                 .filter(|&&b| b)
                 .count() as f64
-                / self.adapt_iter as f64;
+                / self.params.adapt_iter as f64;
             metric.adapt_penalties(frac_load_feasible, frac_time_feasible);
             Self::update_order(sub, metric);
             Self::update_order(sub, metric);
         }
     }
 
-
     /// Pick an solution via tournament over nb_pick candidates
     pub fn pick<'a>(&'a self, nb_pick: usize, rng: &mut SmallRng) -> &'a Solution {
-        
         let fpop_n = self.feasible.solutions.len();
         let ipop_n = self.infeasible.solutions.len();
         let tpop_n = fpop_n + ipop_n;
-        
+
         assert!(tpop_n >= 1, "Need at least 1 solution for tournament");
         let k = nb_pick.max(1).min(tpop_n);
 
@@ -145,7 +146,7 @@ impl Population {
             }
         };
 
-        // Select best among k random candidates, prioritizing feasibility 
+        // Select best among k random candidates, prioritizing feasibility
         // first and diversity score second
         let (mut best_f, mut best_i, mut best_r) = draw(rng);
         for _ in 1..k {
@@ -176,6 +177,17 @@ impl Population {
         }
     }
 
+    /// Return mut reference to the best solution, prioritizing feasible ones
+    pub fn best_mut(&mut self) -> &mut Solution {
+        if !self.feasible.solutions.is_empty() {
+            &mut self.feasible.solutions[self.feasible.order[0]]
+        } else if !self.infeasible.solutions.is_empty() {
+            &mut self.infeasible.solutions[self.infeasible.order[0]]
+        } else {
+            panic!("Population is empty");
+        }
+    }
+
     /// Return reference to the best feasible solution, if any
     pub fn best_feasible(&self) -> Option<&Solution> {
         if !self.feasible.solutions.is_empty() {
@@ -194,7 +206,6 @@ impl Population {
         }
     }
 
-
     // ======================== Internal helpers ========================
 
     /// Reduce subpopulation via survivor selection
@@ -204,9 +215,10 @@ impl Population {
         pop_min: usize,
         nb_close: usize,
         nb_elite: usize,
+        clone_eps: f64,
     ) {
         while sub.solutions.len() > pop_min {
-            let idx = Self::worst_index(sub);
+            let idx = Self::worst_index(sub, clone_eps);
             Self::remove_at(sub, idx);
             Self::update_order(sub, metric);
             Self::update_score(sub, nb_close, nb_elite);
@@ -214,23 +226,19 @@ impl Population {
     }
 
     /// Find the solution with worst score, prioritizing clones
-    fn worst_index(sub: &Subpopulation) -> usize {
+    fn worst_index(sub: &Subpopulation, clone_eps: f64) -> usize {
         let mut worst_idx = 0;
-        let mut worst_is_clone = sub.proxi[0]
-            .first()
-            .is_some_and(|&(d, _)| d <= CLONE_EPS);
+        let mut worst_is_clone = sub.proxi[0].first().is_some_and(|&(d, _)| d <= clone_eps);
         let mut worst_rank = sub.score[0];
 
         for i in 1..sub.solutions.len() {
-            let is_clone = sub.proxi[i]
-                .first()
-                .is_some_and(|&(d, _)| d <= CLONE_EPS);
+            let is_clone = sub.proxi[i].first().is_some_and(|&(d, _)| d <= clone_eps);
             let score = sub.score[i];
 
             if (is_clone && !worst_is_clone) || (is_clone == worst_is_clone && score > worst_rank) {
-                worst_is_clone  = is_clone;
-                worst_rank      = score;
-                worst_idx       = i;
+                worst_is_clone = is_clone;
+                worst_rank = score;
+                worst_idx = i;
             }
         }
         worst_idx
@@ -238,7 +246,6 @@ impl Population {
 
     /// Update proximity metric when a new solution is added to subpopulation
     fn update_proxi(sub: &mut Subpopulation, new_idx: usize) {
-
         // Should always the called with the last index
         debug_assert_eq!(sub.proxi.len(), new_idx);
 
@@ -250,7 +257,7 @@ impl Population {
             let dist = Metric::broken_pairs_distance(&sub.solutions[new_idx], &sub.solutions[i]);
             let pos = sub.proxi[i].partition_point(|(dd, _)| *dd <= dist);
             sub.proxi[i].insert(pos, (dist, new_idx));
-            
+
             // Directly update new solution proximity to avoid double loop
             sub.proxi[new_idx].push((dist, i));
         }
@@ -269,7 +276,9 @@ impl Population {
             list.retain(|&(_, j)| j != idx);
             if last != idx {
                 for pair in list.iter_mut() {
-                    if pair.1 == last { pair.1 = idx; }
+                    if pair.1 == last {
+                        pair.1 = idx;
+                    }
                 }
             }
         }
@@ -280,24 +289,28 @@ impl Population {
         sub.order.clear();
         sub.order.extend(0..sub.solutions.len());
 
-        let values: Vec<f64> = sub.solutions
+        let values: Vec<f64> = sub
+            .solutions
             .iter()
             .map(|solution| metric.value(solution))
             .collect();
 
-        sub.order.sort_unstable_by(|&a, &b| {
-            values[a].partial_cmp(&values[b]).unwrap()
-        });
+        sub.order
+            .sort_unstable_by(|&a, &b| values[a].partial_cmp(&values[b]).unwrap());
     }
 
     /// Update solution ranking based on value order and diversity
     fn update_score(sub: &mut Subpopulation, nb_close: usize, nb_elite: usize) {
-        
         let n = sub.solutions.len();
         sub.score.resize(n, 0.0);
-        
-        if n == 0 { return; }
-        if n == 1 { sub.score[0] = 0.0; return; }
+
+        if n == 0 {
+            return;
+        }
+        if n == 1 {
+            sub.score[0] = 0.0;
+            return;
+        }
 
         let nb_close = nb_close.min(n - 1);
         let denom = (n - 1) as f64;

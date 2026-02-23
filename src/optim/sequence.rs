@@ -1,7 +1,6 @@
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
-
 /// Sequence representing the debris visited by a chaser
 #[derive(Clone, Debug)]
 pub struct Sequence {
@@ -20,7 +19,6 @@ pub struct Sequence {
 }
 
 impl Sequence {
-
     /// Empty sequence with depot-to-depot trip only
     pub fn empty() -> Self {
         Self {
@@ -48,17 +46,15 @@ impl Sequence {
     /// Extend the sequence by appending a debris index
     pub fn push(&mut self, idx: usize, problem: &Problem, oracle: &Oracle) {
         let prev = *self.indices.last().unwrap();
-        let (cost, time) = oracle.evaluate(
-            &problem.states[prev],
-            &problem.states[idx],
-            self.time
-        );
+        let (cost, time) = oracle.evaluate(&problem.states[prev], &problem.states[idx], self.time);
         self.cost += cost;
         self.time += time;
         self.indices.push(idx);
         self.times.push(self.time);
         self.costs.push(self.cost);
-        if idx != 0 { self.load += 1; }
+        if idx != 0 {
+            self.load += 1;
+        }
     }
 
     /// Remove the last debris from the sequence
@@ -68,7 +64,9 @@ impl Sequence {
             self.costs.pop();
             self.cost = *self.costs.last().unwrap();
             self.time = *self.times.last().unwrap();
-            if idx != 0 { self.load -= 1; }
+            if idx != 0 {
+                self.load -= 1;
+            }
         }
     }
 
@@ -114,18 +112,17 @@ impl Sequence {
         for i in 1..n {
             let src = self.indices[i - 1];
             let dst = self.indices[i];
-            let (cost, time) = oracle.evaluate(
-                &problem.states[src],
-                &problem.states[dst],
-                self.time
-            );
+            let (cost, time) =
+                oracle.evaluate(&problem.states[src], &problem.states[dst], self.time);
 
             self.time += time;
             self.cost += cost;
             self.times[i] = self.time;
             self.costs[i] = self.cost;
-            
-            if dst != 0 { self.load += 1; }
+
+            if dst != 0 {
+                self.load += 1;
+            }
         }
     }
 }

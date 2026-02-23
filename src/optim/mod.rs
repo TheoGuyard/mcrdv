@@ -9,5 +9,5 @@ mod sequence;
 mod solution;
 mod solver;
 
-pub use solver::Solver;
 pub use solution::Solution;
+pub use solver::Solver;

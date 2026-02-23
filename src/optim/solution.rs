@@ -3,10 +3,9 @@ use std::fmt;
 use crate::optim::sequence::Sequence;
 use crate::problem::Problem;
 
-
 /// Solution in the population corresponding to a candidate solution
-/// 
-/// An solution is a collection of one sequence per available chaser, 
+///
+/// An solution is a collection of one sequence per available chaser,
 /// possibly empty (depot-to-depot) if the chaser is unused.
 #[derive(Clone)]
 pub struct Solution {
@@ -27,11 +26,7 @@ pub struct Solution {
 }
 
 impl Solution {
-    
-    pub fn new(
-        problem: &Problem,
-        sequences: Vec<Sequence>,
-    ) -> Self {
+    pub fn new(problem: &Problem, sequences: Vec<Sequence>) -> Self {
         let n = problem.states.len();
         let mut sol = Self {
             sequences,
@@ -43,7 +38,7 @@ impl Solution {
             succ: vec![0; n],
         };
         sol.recompute_metrics(problem);
-        
+
         sol
     }
 
@@ -54,8 +49,12 @@ impl Solution {
         self.time_excess = 0.0;
         self.nb_sequences = 0;
 
-        for v in self.pred.iter_mut() { *v = 0; }
-        for v in self.succ.iter_mut() { *v = 0; }
+        for v in self.pred.iter_mut() {
+            *v = 0;
+        }
+        for v in self.succ.iter_mut() {
+            *v = 0;
+        }
 
         for seq in &self.sequences {
             self.total_cost += seq.cost;
@@ -65,7 +64,9 @@ impl Solution {
                 self.nb_sequences += 1;
                 for i in 1..seq.indices.len() - 1 {
                     let node = seq.indices[i];
-                    if node == 0 { continue; }
+                    if node == 0 {
+                        continue;
+                    }
                     self.pred[node] = seq.indices[i - 1];
                     self.succ[node] = seq.indices[i + 1];
                 }
@@ -84,11 +85,14 @@ impl Solution {
     pub fn total_load(&self) -> usize {
         self.sequences.iter().map(|s| s.load).sum()
     }
-    
+
     /// Total mission time duration (max time among all sequences)
     #[inline]
     pub fn total_time(&self) -> f64 {
-        self.sequences.iter().map(|s| s.time).fold(0.0, |a, b| a.max(b))
+        self.sequences
+            .iter()
+            .map(|s| s.time)
+            .fold(0.0, |a, b| a.max(b))
     }
 }
 
@@ -102,7 +106,6 @@ impl fmt::Display for Solution {
         writeln!(f, "  total load : {}", self.total_load())?;
         for (i, seq) in self.sequences.iter().enumerate() {
             if !seq.is_empty() {
-                
                 // Go back to initial indices without depot
                 write!(f, "  Chaser {} → [", i + 1)?;
                 for (pos, &idx) in seq.indices.iter().enumerate() {

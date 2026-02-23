@@ -3,8 +3,8 @@ use scorpion::optim::Solver;
 #[test]
 fn test_preset_levels_0_through_6() {
     for level in 0..=6 {
-        let solver = Solver::preset(level, 10.0, 42);
-        assert!(solver.params.limit_time == 10.0);
+        let solver = Solver::preset(level);
+        assert!(solver.params.limit_time == f64::INFINITY);
         assert!(solver.params.seed == 42);
     }
 }
@@ -12,15 +12,15 @@ fn test_preset_levels_0_through_6() {
 #[test]
 #[should_panic(expected = "level")]
 fn test_preset_invalid_level_panics() {
-    let _ = Solver::preset(99, 10.0, 42);
+    let _ = Solver::preset(99);
 }
 
 #[test]
 fn test_preset_higher_level_means_larger_population() {
-    let s2 = Solver::preset(2, 10.0, 42);
-    let s6 = Solver::preset(6, 10.0, 42);
+    let s2 = Solver::preset(2);
+    let s6 = Solver::preset(6);
     assert!(
-        s6.params.pop_init > s2.params.pop_init,
+        s6.generator.params.pop_init > s2.generator.params.pop_init,
         "Higher level should have larger initial population"
     );
     assert!(

@@ -1,8 +1,8 @@
 mod common;
 
 use common::{default_oracle, make_test_debris, relaxed_problem};
-use scorpion::optim::Solver;
 use scorpion::Problem;
+use scorpion::optim::Solver;
 
 #[test]
 fn test_feasible_is_always_better_than_infeasible() {
@@ -11,8 +11,8 @@ fn test_feasible_is_always_better_than_infeasible() {
     // Relaxed problem for feasible solution
     let problem_ok = relaxed_problem(&debris);
     let oracle = default_oracle();
-    let mut solver_ok = Solver::preset(0, 5.0, 42);
-    let sol_ok = solver_ok.solver(&problem_ok, &oracle);
+    let mut solver_ok = Solver::preset(0);
+    let (sol_ok, _) = solver_ok.solve(&problem_ok, &oracle);
     assert!(sol_ok.is_feasible());
 
     // Tight problem for infeasible solution
@@ -20,11 +20,11 @@ fn test_feasible_is_always_better_than_infeasible() {
         &debris,
         "barycenter".to_string(),
         5,
-        5,    // load is fine
-        1.0,  // 1 second → almost certainly infeasible
+        5,   // load is fine
+        1.0, // 1 second → almost certainly infeasible
     );
-    let mut solver_tight = Solver::preset(0, 5.0, 99);
-    let sol_tight = solver_tight.solver(&problem_tight, &oracle);
+    let mut solver_tight = Solver::preset(0);
+    let (sol_tight, _) = solver_tight.solve(&problem_tight, &oracle);
 
     // A feasible should beat an infeasible regardless of cost
     assert!(

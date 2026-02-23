@@ -1,5 +1,5 @@
-use scorpion::orbit::{Oracle, State};
 use scorpion::Problem;
+use scorpion::orbit::{Oracle, State};
 
 /// Build a small set of synthetic debris states for testing.
 /// Returns up to 10 states with varying orbital elements to exercise the oracle
@@ -7,7 +7,7 @@ use scorpion::Problem;
 pub fn make_test_debris(n: usize) -> Vec<State> {
     assert!(n <= 10);
     let base_a = 7_000_000.0; // ~7 000 km semi-major axis
-    let base_i = 1.5;         // ~86° inclination (near-polar)
+    let base_i = 1.5; // ~86° inclination (near-polar)
     (0..n)
         .map(|k| {
             let f = k as f64;
@@ -34,8 +34,8 @@ pub fn relaxed_problem(debris: &Vec<State>) -> Problem {
     Problem::new(
         debris,
         "barycenter".to_string(),
-        5,               // max chasers
-        debris.len(),     // max load = all debris can fit in one chaser
-        100_000_000.0,    // max time (very generous)
+        5,             // max chasers
+        debris.len(),  // max load = all debris can fit in one chaser
+        100_000_000.0, // max time (very generous)
     )
 }

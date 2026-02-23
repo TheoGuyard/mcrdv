@@ -8,8 +8,8 @@ fn test_population_has_feasible_solutions_after_solve() {
     let debris = make_test_debris(4);
     let problem = relaxed_problem(&debris);
     let oracle = default_oracle();
-    let mut solver = Solver::preset(2, 5.0, 42);
-    let _ = solver.solver(&problem, &oracle);
+    let mut solver = Solver::preset(2);
+    let _ = solver.solve(&problem, &oracle);
 
     // After solving, the population should contain feasible solutions
     assert!(
@@ -23,8 +23,8 @@ fn test_population_best_returns_best_feasible() {
     let debris = make_test_debris(4);
     let problem = relaxed_problem(&debris);
     let oracle = default_oracle();
-    let mut solver = Solver::preset(2, 5.0, 42);
-    let best = solver.solver(&problem, &oracle);
+    let mut solver = Solver::preset(2);
+    let (best, _) = solver.solve(&problem, &oracle);
 
     // Best from solver should match population.best() quality
     let pop_best = solver.population.best();

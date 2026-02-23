@@ -1,13 +1,18 @@
+use rand::Rng;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 
-use crate::optim::solution::Solution;
 use crate::optim::metric::Metric;
 use crate::optim::sequence::Sequence;
+use crate::optim::solution::Solution;
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
+#[derive(Clone)]
+pub struct SearchParams {
+    /// Number of neighbors to consider for proximity-based moves
+    pub nb_neighbors: usize,
+}
 
 /// Local search operator to improve solutions
 ///
@@ -15,41 +20,44 @@ use crate::problem::Problem;
 /// - Intra-route: relocate, swap, 2-opt
 /// - Inter-route: relocate/exchange, 2-opt*
 pub struct Search {
+    pub params: SearchParams,
     /// For each client state i, its nearest neighbors (by static distance proxy).
     neighbors: Vec<Vec<usize>>,
-    /// Number of neighbors to consider for proximity-based moves
-    nb_neighbors: usize,
 }
 
 /// Type of relocate/exchange move performed
 #[derive(Clone, Copy)]
-enum InterMove { Relocate, Exchange }
+enum InterMove {
+    Relocate,
+    Exchange,
+}
 
 impl Search {
-
-    pub fn new (nb_neighbors: usize) -> Self {
+    pub fn new(params: SearchParams) -> Self {
         Self {
+            params,
             neighbors: Vec::new(),
-            nb_neighbors,
         }
     }
-    
+
     /// Initialize the local search
     pub fn initialize(&mut self, problem: &Problem, oracle: &Oracle) {
         let n = problem.states.len();
-        
+
         self.neighbors = vec![Vec::new(); n];
 
         // Evaluate time-independent proximity between states
         for i in 1..n {
             let mut proxi: Vec<(f64, usize)> = Vec::with_capacity(n - 1);
             for j in 1..n {
-                if j == i { continue; }
+                if j == i {
+                    continue;
+                }
                 let d = oracle.distance(&problem.states[i], &problem.states[j]);
                 proxi.push((d, j));
             }
             proxi.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let keep = self.nb_neighbors.min(proxi.len());
+            let keep = self.params.nb_neighbors.min(proxi.len());
             self.neighbors[i] = proxi[..keep].iter().map(|&(_, j)| j).collect();
         }
     }
@@ -66,14 +74,14 @@ impl Search {
         let n = problem.states.len();
         let k = sol.sequences.len();
 
-        // Track which sequences each state belongs to 
+        // Track which sequences each state belongs to
         let mut state_seq = vec![0usize; n];
         let mut state_pos = vec![0usize; n];
 
         // Track when state was last tests and sequence was last modified
         let mut when_last_tested = vec![0usize; n];
         let mut when_last_modified = vec![0usize; k];
-        
+
         let mut num_moves: usize = 1;
 
         // Initialize mappings
@@ -115,8 +123,16 @@ impl Search {
                         let pv = state_pos[v];
 
                         // Inter-route relocate: move u to after v
-                        if self.move_inter_relocate(problem, oracle, metric, sol, su, pu, sv, pv + 1)
-                        {
+                        if self.move_inter_relocate(
+                            problem,
+                            oracle,
+                            metric,
+                            sol,
+                            su,
+                            pu,
+                            sv,
+                            pv + 1,
+                        ) {
                             num_moves += 1;
                             when_last_modified[su] = num_moves;
                             when_last_modified[sv] = num_moves;
@@ -127,9 +143,8 @@ impl Search {
 
                         // Special case: relocate u when it's right after depot
                         if pu == 1
-                            && self.move_inter_relocate(
-                                problem, oracle, metric, sol, sv, pv, su, pu
-                            )
+                            && self
+                                .move_inter_relocate(problem, oracle, metric, sol, sv, pv, su, pu)
                         {
                             num_moves += 1;
                             when_last_modified[su] = num_moves;
@@ -154,33 +169,28 @@ impl Search {
                 // ==================== Empty route moves ====================
                 let su = state_seq[u];
                 let pu = state_pos[u];
-                if loop_id > 1 {
-                    if let Some(empty_s) = sol
-                        .sequences
-                        .iter()
-                        .position(|s| s.is_empty())
-                    {
-                        if empty_s != su {
-                            // 2-opt* with empty route
-                            if self.move_2opt_star(problem, oracle, metric, sol, su, pu, empty_s, 1) {
-                                num_moves += 1;
-                                when_last_modified[su] = num_moves;
-                                when_last_modified[empty_s] = num_moves;
-                                Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
-                                improved = true;
-                                continue;
-                            }
+                if loop_id > 1
+                    && let Some(empty_s) = sol.sequences.iter().position(|s| s.is_empty())
+                    && empty_s != su
+                {
+                    // 2-opt* with empty route
+                    if self.move_2opt_star(problem, oracle, metric, sol, su, pu, empty_s, 1) {
+                        num_moves += 1;
+                        when_last_modified[su] = num_moves;
+                        when_last_modified[empty_s] = num_moves;
+                        Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
+                        improved = true;
+                        continue;
+                    }
 
-                            // Relocate to empty route
-                            if self.move_inter_relocate(problem, oracle, metric, sol, su, pu, empty_s, 1) {
-                                num_moves += 1;
-                                when_last_modified[su] = num_moves;
-                                when_last_modified[empty_s] = num_moves;
-                                Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
-                                improved = true;
-                                continue;
-                            }
-                        }
+                    // Relocate to empty route
+                    if self.move_inter_relocate(problem, oracle, metric, sol, su, pu, empty_s, 1) {
+                        num_moves += 1;
+                        when_last_modified[su] = num_moves;
+                        when_last_modified[empty_s] = num_moves;
+                        Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
+                        improved = true;
+                        continue;
                     }
                 }
 
@@ -221,11 +231,7 @@ impl Search {
     }
 
     /// Update state in sequence mappings
-    fn rebuild_mappings(
-        sol: &Solution,
-        state_seq: &mut [usize],
-        state_pos: &mut [usize],
-    ) {
+    fn rebuild_mappings(sol: &Solution, state_seq: &mut [usize], state_pos: &mut [usize]) {
         for (s, seq) in sol.sequences.iter().enumerate() {
             for (p, &idx) in seq.indices.iter().enumerate() {
                 if idx != 0 {
@@ -402,8 +408,7 @@ impl Search {
             return false;
         }
 
-        let old_value = metric.sequence_value(problem, seq1)
-            + metric.sequence_value(problem, seq2);
+        let old_value = metric.sequence_value(problem, seq1) + metric.sequence_value(problem, seq2);
 
         let state_u = seq1.indices[pos1];
         let mut best_value = old_value;
@@ -419,8 +424,7 @@ impl Search {
 
             let c1 = Sequence::from_indices(new_s1, problem, oracle);
             let c2 = Sequence::from_indices(new_s2, problem, oracle);
-            let val = metric.sequence_value(problem, &c1)
-                + metric.sequence_value(problem, &c2);
+            let val = metric.sequence_value(problem, &c1) + metric.sequence_value(problem, &c2);
 
             if val < best_value {
                 best_value = val;
@@ -438,12 +442,13 @@ impl Search {
 
             let c1 = Sequence::from_indices(new_s1, problem, oracle);
             let c2 = Sequence::from_indices(new_s2, problem, oracle);
-            let val = metric.sequence_value(problem, &c1)
-                + metric.sequence_value(problem, &c2);
+            let val = metric.sequence_value(problem, &c1) + metric.sequence_value(problem, &c2);
 
             if val < best_value {
                 #[allow(unused_assignments)]
-                { best_value = val; }
+                {
+                    best_value = val;
+                }
                 best_move = Some(InterMove::Exchange);
             }
         }
@@ -494,8 +499,7 @@ impl Search {
             return false;
         }
 
-        let old_value = metric.sequence_value(problem, seq1)
-            + metric.sequence_value(problem, seq2);
+        let old_value = metric.sequence_value(problem, seq1) + metric.sequence_value(problem, seq2);
 
         // Build new routes by swapping tails
         let mut new_s1_indices: Vec<usize> = seq1.indices[..pos1].to_vec();
@@ -506,8 +510,7 @@ impl Search {
 
         let c1 = Sequence::from_indices(new_s1_indices.clone(), problem, oracle);
         let c2 = Sequence::from_indices(new_s2_indices.clone(), problem, oracle);
-        let new_value = metric.sequence_value(problem, &c1)
-            + metric.sequence_value(problem, &c2);
+        let new_value = metric.sequence_value(problem, &c1) + metric.sequence_value(problem, &c2);
 
         if new_value < old_value {
             sol.sequences[s1] = c1;
