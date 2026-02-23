@@ -169,32 +169,28 @@ impl Search {
                 // ==================== Empty route moves ====================
                 let su = state_seq[u];
                 let pu = state_pos[u];
-                if loop_id > 1 {
-                    if let Some(empty_s) = sol.sequences.iter().position(|s| s.is_empty()) {
-                        if empty_s != su {
-                            // 2-opt* with empty route
-                            if self.move_2opt_star(problem, oracle, metric, sol, su, pu, empty_s, 1)
-                            {
-                                num_moves += 1;
-                                when_last_modified[su] = num_moves;
-                                when_last_modified[empty_s] = num_moves;
-                                Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
-                                improved = true;
-                                continue;
-                            }
+                if loop_id > 1
+                    && let Some(empty_s) = sol.sequences.iter().position(|s| s.is_empty())
+                    && empty_s != su
+                {
+                    // 2-opt* with empty route
+                    if self.move_2opt_star(problem, oracle, metric, sol, su, pu, empty_s, 1) {
+                        num_moves += 1;
+                        when_last_modified[su] = num_moves;
+                        when_last_modified[empty_s] = num_moves;
+                        Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
+                        improved = true;
+                        continue;
+                    }
 
-                            // Relocate to empty route
-                            if self.move_inter_relocate(
-                                problem, oracle, metric, sol, su, pu, empty_s, 1,
-                            ) {
-                                num_moves += 1;
-                                when_last_modified[su] = num_moves;
-                                when_last_modified[empty_s] = num_moves;
-                                Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
-                                improved = true;
-                                continue;
-                            }
-                        }
+                    // Relocate to empty route
+                    if self.move_inter_relocate(problem, oracle, metric, sol, su, pu, empty_s, 1) {
+                        num_moves += 1;
+                        when_last_modified[su] = num_moves;
+                        when_last_modified[empty_s] = num_moves;
+                        Self::rebuild_mappings(sol, &mut state_seq, &mut state_pos);
+                        improved = true;
+                        continue;
                     }
                 }
 
