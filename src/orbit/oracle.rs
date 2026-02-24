@@ -7,9 +7,9 @@ pub struct Oracle {
     /// - "direct": direct transfer using maximum thrust
     /// - "drift": drift transfer using intermediate orbit
     /// - "best": select best strategy among all available
-    strategy: String,
+    pub strategy: String,
     /// Maximum thrust for maneuvers [m/s^2]
-    max_thrust: f64,
+    pub max_thrust: f64,
 }
 
 /// Signature of oracle evaluation function, regardless of the strategy used

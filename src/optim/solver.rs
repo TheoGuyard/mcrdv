@@ -1,5 +1,6 @@
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 use crate::optim::crossover::Crossover;
@@ -34,7 +35,7 @@ pub struct SolverParams {
 }
 
 /// Trace for Solver
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct SolverTrace {
     pub iter: Vec<usize>,
     pub nimp: Vec<usize>,

@@ -3,6 +3,9 @@
 
 examples/*.txt
 
+experiments/results/*
+!experiments/results/.gitkeep
+
 # Rust
 debug
 target

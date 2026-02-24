@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::optim::sequence::Sequence;
@@ -7,7 +8,7 @@ use crate::problem::Problem;
 ///
 /// An solution is a collection of one sequence per available chaser,
 /// possibly empty (depot-to-depot) if the chaser is unused.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Solution {
     /// Sequence for each chaser
     pub sequences: Vec<Sequence>,
