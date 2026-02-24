@@ -1,0 +1,20 @@
+{
+  "experiment"      : "template",
+
+  "problem": {
+    "dataset"       : "iridium33",
+    "chaser_start"  : "barycenter",
+    "max_chasers"   : 20,
+    "max_load"      : 20,
+    "mission_time"  : 31536000.0
+  },
+
+  "oracle": {
+    "strategy"      : "direct",
+    "max_thrust"    : 0.003
+  },
+
+  "solver": {
+    "time_limit"    : 60.0
+  }
+}

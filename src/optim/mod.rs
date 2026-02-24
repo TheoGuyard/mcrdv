@@ -9,5 +9,7 @@ mod sequence;
 mod solution;
 mod solver;
 
+pub use params::Params;
 pub use solution::Solution;
 pub use solver::Solver;
+pub use solver::SolverTrace;

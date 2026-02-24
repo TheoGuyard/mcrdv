@@ -1,8 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 use crate::orbit::Oracle;
 use crate::problem::Problem;
 
 /// Sequence representing the debris visited by a chaser
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sequence {
     /// Ordered list of debris indices (first/last are 0: the chaser depot)
     pub indices: Vec<usize>,

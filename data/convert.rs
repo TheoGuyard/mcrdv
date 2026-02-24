@@ -35,8 +35,8 @@ impl Serialize for FormattedFloat {
             let raw = format!("{:.*e}", self.precision, self.value);
             if let Some(pos) = raw.find('e') {
                 let mantissa = &raw[..pos];
-                let exp: i32 = raw[pos + 1..].parse().unwrap();
-                format!("{}e{:+03}", mantissa, exp)
+                let exponent: i32 = raw[pos + 1..].parse().unwrap();
+                format!("{}e{:+03}", mantissa, exponent)
             } else {
                 raw
             }
