@@ -4,6 +4,9 @@ use scorpion::optim::Solver;
 use scorpion::orbit::Oracle;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Wether to write the solution to file
+    let write_solution = true;
+
     // Load debris from input file
     let debris = Loader::load("data/iridium33.csv");
 
@@ -20,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let oracle = Oracle::new(
         "direct".to_string(), // transfer strategy ("direct", "drift", "best")
         0.003,                // maximum chaser thrust in m/s^2
+        6878e3,               // minimum semimajor axis allowed in m
     );
 
     // Set solver (used to optimize chaser routes)
@@ -34,7 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", solution);
 
     // Write solution to file if output path provided
-    Writer::write("examples/simple.txt", &solution);
+    if write_solution {
+        Writer::write("examples/simple.txt", &solution);
+    }
 
     Ok(())
 }

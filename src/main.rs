@@ -46,6 +46,10 @@ pub struct Args {
     #[arg(long, default_value_t = 0.003)]
     pub max_thrust: f64,
 
+    /// Minimum semimajor axis allowed [m]
+    #[arg(long, default_value_t = 6878e3)]
+    pub min_sma: f64,
+
     // =============== Solver parameters =============== //
     /// Level of aggressiveness in the solver (0-6, higher = more aggressive)
     #[arg(long, default_value_t = 3)]
@@ -80,8 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Oracle parameters");
     println!("  strategy     : {}", args.strategy);
     println!("  max thrust   : {} m/s^2", args.max_thrust);
+    println!("  min sma      : {} m", args.min_sma);
     println!();
-    let oracle = Oracle::new(args.strategy, args.max_thrust);
+    let oracle = Oracle::new(args.strategy, args.max_thrust, args.min_sma);
 
     // Set solver (used to optimize chaser routes)
     println!("Solver parameters");

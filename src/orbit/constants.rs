@@ -6,3 +6,6 @@ pub const RE: f64 = 6.3781e6;
 
 /// Earth J2 coefficient [dimensionless]
 pub const J2: f64 = 1.08263e-3;
+
+/// Pi constant [radians]
+pub const PI: f64 = std::f64::consts::PI;

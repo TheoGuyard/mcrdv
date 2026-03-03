@@ -140,6 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config["oracle"]["max_thrust"]
             .as_f64()
             .expect("Missing oracle.max_thrust keyword"),
+        config["oracle"]["min_sma"]
+            .as_f64()
+            .expect("Missing oracle.min_sma keyword"),
     );
 
     // ===== Solve problem =====
@@ -154,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Oracle parameters");
     println!("  strategy     : {}", oracle.strategy);
     println!("  max thrust   : {} m/s^2", oracle.max_thrust);
+    println!("  min sma      : {} m", oracle.min_sma);
     println!();
 
     let argmap = config["solver"]

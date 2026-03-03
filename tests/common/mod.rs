@@ -25,7 +25,7 @@ pub fn make_test_debris(n: usize) -> Vec<State> {
 
 /// Create a default oracle using direct transfer strategy.
 pub fn default_oracle() -> Oracle {
-    Oracle::new("direct".to_string(), 0.003)
+    Oracle::new("direct".to_string(), 0.003, 6378e3)
 }
 
 /// Create a relaxed problem with generous constraints so that feasible

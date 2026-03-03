@@ -8,10 +8,10 @@ use scorpion::optim::Solver;
 
 #[test]
 fn test_loader() {
-    let states = Loader::load("data/ordc.csv");
+    let states = Loader::load("data/odrc.csv");
     assert!(
         !states.is_empty(),
-        "Should load at least one debris from ordc.csv"
+        "Should load at least one debris from odrc.csv"
     );
     // Check that values are physically reasonable
     for s in &states {
@@ -40,7 +40,7 @@ fn test_writer_roundtrip() {
     Writer::write(path, &sol);
 
     let content = fs::read_to_string(path).unwrap();
-    assert!(content.contains("Solution"));
+    assert!(content.contains("Mission plan"));
     assert!(content.contains("feasible"));
     assert!(content.contains("total cost"));
     assert!(content.contains("depot"));

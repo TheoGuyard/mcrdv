@@ -22,7 +22,7 @@ fn make_test_debris(n: usize) -> Vec<State> {
 }
 
 fn default_oracle() -> Oracle {
-    Oracle::new("direct".to_string(), 0.003)
+    Oracle::new("direct".to_string(), 0.003, 6378e3)
 }
 
 #[test]
@@ -84,8 +84,8 @@ fn test_oracle_different_thrust_levels() {
         t: 0.6,
     };
 
-    let oracle_low = Oracle::new("direct".to_string(), 0.001);
-    let oracle_high = Oracle::new("direct".to_string(), 0.01);
+    let oracle_low = Oracle::new("direct".to_string(), 0.001, 6378e3);
+    let oracle_high = Oracle::new("direct".to_string(), 0.01, 6378e3);
 
     let (cost_low, time_low) = oracle_low.evaluate(&s1, &s2, 0.0, f64::INFINITY);
     let (cost_high, time_high) = oracle_high.evaluate(&s1, &s2, 0.0, f64::INFINITY);

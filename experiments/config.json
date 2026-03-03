@@ -11,7 +11,8 @@
 
   "oracle": {
     "strategy"      : "direct",
-    "max_thrust"    : 0.003
+    "max_thrust"    : 0.003,
+    "min_sma"       : 6878e3
   },
 
   "solver": {
