@@ -1,3 +1,5 @@
+use core::f64;
+
 use rand::Rng;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
@@ -59,10 +61,18 @@ impl Generator {
                 let prev = *indices.last().unwrap();
 
                 // Check time constraint (whether we can go to debris and return to depot)
-                let (_, tof_to) =
-                    oracle.evaluate(&problem.states[prev], &problem.states[node], time);
-                let (_, tof_back) =
-                    oracle.evaluate(&problem.states[node], &problem.states[0], time + tof_to);
+                let (_, tof_to) = oracle.evaluate(
+                    &problem.states[prev],
+                    &problem.states[node],
+                    time,
+                    problem.mission_time,
+                );
+                let (_, tof_back) = oracle.evaluate(
+                    &problem.states[node],
+                    &problem.states[0],
+                    time + tof_to,
+                    problem.mission_time,
+                );
 
                 if time + tof_to + tof_back > problem.mission_time {
                     i += 1; // Continue checking if other debris can be visited
@@ -149,8 +159,12 @@ impl Generator {
 
             available[start_index] = false;
             let mut indices = vec![0, start_index];
-            let (_, mut time) =
-                oracle.evaluate(&problem.states[0], &problem.states[start_index], 0.0);
+            let (_, mut time) = oracle.evaluate(
+                &problem.states[0],
+                &problem.states[start_index],
+                0.0,
+                problem.mission_time,
+            );
             let mut load = 1usize;
 
             // Greedily extend the route with nearest feasible neighbor
@@ -162,7 +176,8 @@ impl Generator {
 
                 let current = *indices.last().unwrap();
                 let mut best_index: Option<usize> = None;
-                let mut best_cost = f64::MAX;
+                let mut best_cost = f64::INFINITY;
+                let mut best_time = f64::INFINITY;
 
                 for &node in &sorted_indices {
                     if !available[node] {
@@ -170,10 +185,18 @@ impl Generator {
                     }
 
                     // Check time constraint (whether we can go to debris and return to depot)
-                    let (fuel, tof) =
-                        oracle.evaluate(&problem.states[current], &problem.states[node], time);
-                    let (_, tof_back) =
-                        oracle.evaluate(&problem.states[node], &problem.states[0], time + tof);
+                    let (fuel, tof) = oracle.evaluate(
+                        &problem.states[current],
+                        &problem.states[node],
+                        time,
+                        problem.mission_time,
+                    );
+                    let (_, tof_back) = oracle.evaluate(
+                        &problem.states[node],
+                        &problem.states[0],
+                        time + tof,
+                        problem.mission_time,
+                    );
                     if time + tof + tof_back > problem.mission_time {
                         continue;
                     }
@@ -182,6 +205,7 @@ impl Generator {
                     if fuel < best_cost {
                         best_index = Some(node);
                         best_cost = fuel;
+                        best_time = tof;
                     }
                 }
 
@@ -189,9 +213,7 @@ impl Generator {
                 match best_index {
                     Some(node) => {
                         available[node] = false;
-                        let (_, tof) =
-                            oracle.evaluate(&problem.states[current], &problem.states[node], time);
-                        time += tof;
+                        time += best_time;
                         load += 1;
                         indices.push(node);
                     }

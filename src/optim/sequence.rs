@@ -48,7 +48,12 @@ impl Sequence {
     /// Extend the sequence by appending a debris index
     pub fn push(&mut self, idx: usize, problem: &Problem, oracle: &Oracle) {
         let prev = *self.indices.last().unwrap();
-        let (cost, time) = oracle.evaluate(&problem.states[prev], &problem.states[idx], self.time);
+        let (cost, time) = oracle.evaluate(
+            &problem.states[prev],
+            &problem.states[idx],
+            self.time,
+            problem.mission_time,
+        );
         self.cost += cost;
         self.time += time;
         self.indices.push(idx);
@@ -114,8 +119,12 @@ impl Sequence {
         for i in 1..n {
             let src = self.indices[i - 1];
             let dst = self.indices[i];
-            let (cost, time) =
-                oracle.evaluate(&problem.states[src], &problem.states[dst], self.time);
+            let (cost, time) = oracle.evaluate(
+                &problem.states[src],
+                &problem.states[dst],
+                self.time,
+                problem.mission_time,
+            );
 
             self.time += time;
             self.cost += cost;

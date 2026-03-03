@@ -24,17 +24,33 @@ impl Oracle {
     }
 
     /// Evaluate cost and time of transfer between two orbital states
-    pub fn evaluate(&self, src: &State, dst: &State, start_time: f64) -> (f64, f64) {
+    /// Note: if the transfer cannot be completed within the stop time, cost is
+    /// set to infinity, and the time returned is the smallest possible time of
+    /// flight to make the transfer feasible
+    pub fn evaluate(
+        &self,
+        src: &State,
+        dst: &State,
+        start_time: f64,
+        stop_time: f64,
+    ) -> (f64, f64) {
         // Propagate states to the transfer start time
         let src_prop = self.propagate(src, start_time);
         let dst_prop = self.propagate(dst, start_time);
 
-        // Evaluate transfer cost and time based on selected strategy
-        match self.strategy.as_str() {
+        // Evaluate cost and minimum transfer time based on selected strategy
+        let (cost, time) = match self.strategy.as_str() {
             "direct" => self.evaluate_direct(&src_prop, &dst_prop),
             "drift" => self.evaluate_drift(&src_prop, &dst_prop),
             "best" => self.evaluate_best(&src_prop, &dst_prop),
             _ => panic!("Unsupported transfer strategy: {}", self.strategy),
+        };
+
+        // Check if transfer can be completed within stop time
+        if start_time + time > stop_time {
+            (f64::INFINITY, time)
+        } else {
+            (cost, time)
         }
     }
 
