@@ -45,7 +45,7 @@ fn test_solution_display_does_not_panic() {
 }
 
 #[test]
-fn test_solution_total_time_is_max_of_sequences() {
+fn test_solution_max_time_is_max_of_sequences() {
     let debris = make_test_debris(4);
     let problem = relaxed_problem(&debris);
     let oracle = default_oracle();
@@ -57,7 +57,7 @@ fn test_solution_total_time_is_max_of_sequences() {
         .iter()
         .map(|s| s.time)
         .fold(0.0_f64, |a, b| a.max(b));
-    assert!((sol.total_time() - mission_time).abs() < 1e-12);
+    assert!((sol.max_time() - mission_time).abs() < 1e-12);
 }
 
 #[test]

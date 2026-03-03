@@ -156,13 +156,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  max thrust   : {} m/s^2", oracle.max_thrust);
     println!();
 
-    let mut params = Params::base();
     let argmap = config["solver"]
         .as_object()
-        .expect("Missing solver keyword")
-        .iter();
+        .expect("Missing solver keyword");
+
+    let mut params = match argmap.get("level") {
+        Some(value) => Params::preset(value.as_u64().unwrap() as usize),
+        None => Params::base(),
+    };
+
     for (key, value) in argmap {
-        update_params(&mut params, key, value);
+        if key != "level" {
+            update_params(&mut params, key, value);
+        }
     }
 
     let mut solver = Solver::new(params);

@@ -81,19 +81,76 @@ impl Solution {
         self.load_excess == 0 && self.time_excess == 0.0
     }
 
-    /// Total number of debris collected across all sequences
+    /// Sum of number of debris collected over all chasers
     #[inline]
     pub fn total_load(&self) -> usize {
-        self.sequences.iter().map(|s| s.load).sum()
+        if self.nb_sequences > 0 {
+            self.sequences.iter().map(|s| s.load).sum()
+        } else {
+            0
+        }
     }
 
-    /// Total mission time duration (max time among all sequences)
+    /// Maximum load collected among chasers
+    #[inline]
+    pub fn max_load(&self) -> usize {
+        self.sequences.iter().map(|s| s.load).max().unwrap_or(0)
+    }
+
+    /// Minimum load collected among chasers
+    #[inline]
+    pub fn min_load(&self) -> usize {
+        self.sequences.iter().map(|s| s.load).min().unwrap_or(0)
+    }
+
+    /// Average load per used chaser
+    #[inline]
+    pub fn avg_load(&self) -> f64 {
+        if self.nb_sequences > 0 {
+            self.total_load() as f64 / self.nb_sequences as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Sum of mission time over all chasers
     #[inline]
     pub fn total_time(&self) -> f64 {
+        if self.nb_sequences > 0 {
+            self.sequences.iter().map(|s| s.time).sum()
+        } else {
+            0.0
+        }
+    }
+
+    /// Maximum mission time among chasers
+    #[inline]
+    pub fn max_time(&self) -> f64 {
         self.sequences
             .iter()
             .map(|s| s.time)
-            .fold(0.0, |a, b| a.max(b))
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0)
+    }
+
+    /// Minimum mission time among chasers
+    #[inline]
+    pub fn min_time(&self) -> f64 {
+        self.sequences
+            .iter()
+            .map(|s| s.time)
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0)
+    }
+
+    /// Average mission time per used chaser
+    #[inline]
+    pub fn avg_time(&self) -> f64 {
+        if self.nb_sequences > 0 {
+            self.total_time() / self.nb_sequences as f64
+        } else {
+            0.0
+        }
     }
 }
 

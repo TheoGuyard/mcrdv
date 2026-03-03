@@ -15,6 +15,6 @@
   },
 
   "solver": {
-    "time_limit"    : 60.0
+    "limit_time"    : 60.0
   }
 }

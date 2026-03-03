@@ -15,7 +15,7 @@ use crate::orbit::Oracle;
 use crate::problem::Problem;
 
 /// Length of log lines in terminal output
-const LOG_LENGTH: usize = 99;
+const LOG_LENGTH: usize = 112;
 
 /// Parameters for Solver
 #[derive(Clone)]
@@ -41,7 +41,12 @@ pub struct SolverTrace {
     pub nimp: Vec<usize>,
     pub time: Vec<f64>,
     pub best_cost: Vec<f64>,
-    pub best_time: Vec<f64>,
+    pub avg_time: Vec<f64>,
+    pub avg_load: Vec<f64>,
+    pub max_time: Vec<f64>,
+    pub max_load: Vec<u64>,
+    pub min_time: Vec<f64>,
+    pub min_load: Vec<u64>,
     pub n_feasible: Vec<usize>,
     pub n_infeasible: Vec<usize>,
     pub ratio_feasible: Vec<f64>,
@@ -213,12 +218,13 @@ impl Solver {
         println!("Running solver...");
         println!("{}", "-".repeat(LOG_LENGTH));
         println!(
-            "{:>8} {:>8} {:>8} | {:>12} {:>12} | {:>6} {:>6} {:>6} {:>10} {:>10}",
+            "{:>8} {:>8} {:>8} | {:>12} {:>12} {:>12} | {:>5} {:>5} {:>5} {:>8} {:>8}",
             "iter",
             "(last)",
             "time",
-            "cost [m/s]",
-            "time [s]",
+            "delta-v [m/s]",
+            "avg time [s]",
+            "avg load",
             "feas.",
             "inf.",
             "ratio",
@@ -230,11 +236,21 @@ impl Solver {
 
     fn print_iter(&mut self, iter: usize, nimp: usize, t0: Instant) {
         let mut best_cost = "--".to_string();
-        let mut best_time = "--".to_string();
+        let mut avg_time = "--".to_string();
+        let mut avg_load = "--".to_string();
+        let mut max_time = "--".to_string();
+        let mut max_load = "--".to_string();
+        let mut min_time = "--".to_string();
+        let mut min_load = "--".to_string();
 
         if let Some(sol) = self.population.best_feasible() {
             best_cost = format!("{:.2}", sol.total_cost);
-            best_time = format!("{:.2}", sol.total_time());
+            avg_time = format!("{:.2}", sol.avg_time());
+            avg_load = format!("{:.2}", sol.avg_load());
+            max_time = format!("{:.2}", sol.max_time());
+            max_load = format!("{:.0}", sol.max_load());
+            min_time = format!("{:.2}", sol.min_time());
+            min_load = format!("{:.0}", sol.min_load());
         }
 
         let n_fea = self.population.feasible.solutions.len();
@@ -246,12 +262,13 @@ impl Solver {
         };
 
         println!(
-            "{:8} {:8} {:>8.2} | {:>12} {:>12} | {:>6} {:>6} {:>6.2} {:>10.2e} {:>10.2e}",
+            "{:8} {:8} {:>8.2} | {:>12} {:>12} {:>12} | {:>5} {:>5} {:>5.2} {:>8.2e} {:>8.2e}",
             iter,
             nimp,
             t0.elapsed().as_secs_f64(),
             best_cost,
-            best_time,
+            avg_time,
+            avg_load,
             n_fea,
             n_inf,
             ratio,
@@ -268,8 +285,23 @@ impl Solver {
                 .best_cost
                 .push(best_cost.parse::<f64>().unwrap_or(f64::INFINITY));
             self.trace
-                .best_time
-                .push(best_time.parse::<f64>().unwrap_or(f64::INFINITY));
+                .avg_time
+                .push(avg_time.parse::<f64>().unwrap_or(f64::INFINITY));
+            self.trace
+                .avg_load
+                .push(avg_load.parse::<f64>().unwrap_or(f64::MAX));
+            self.trace
+                .max_time
+                .push(max_time.parse::<f64>().unwrap_or(f64::INFINITY));
+            self.trace
+                .max_load
+                .push(max_load.parse::<u64>().unwrap_or(u64::MAX));
+            self.trace
+                .min_time
+                .push(min_time.parse::<f64>().unwrap_or(f64::INFINITY));
+            self.trace
+                .min_load
+                .push(min_load.parse::<u64>().unwrap_or(u64::MAX));
             self.trace.n_feasible.push(n_fea);
             self.trace.n_infeasible.push(n_inf);
             self.trace.ratio_feasible.push(ratio);

@@ -15,17 +15,15 @@ impl Writer {
         ));
         content.push_str(&format!("    total cost      : {}\n", solution.total_cost));
         content.push_str(&format!(
-            "    total time      : {}\n",
-            solution.total_time()
-        ));
-        content.push_str(&format!(
-            "    total load      : {}\n",
-            solution.total_load()
-        ));
-        content.push_str(&format!(
             "    total chasers   : {}\n",
             solution.sequences.len()
         ));
+        content.push_str(&format!("    max time        : {}\n", solution.max_time()));
+        content.push_str(&format!("    min time        : {}\n", solution.min_time()));
+        content.push_str(&format!("    avg time        : {}\n", solution.avg_time()));
+        content.push_str(&format!("    max load        : {}\n", solution.max_load()));
+        content.push_str(&format!("    min load        : {}\n", solution.min_load()));
+        content.push_str(&format!("    avg load        : {}\n", solution.avg_load()));
 
         for (i, seq) in solution.sequences.iter().enumerate() {
             content.push_str(&format!("Chaser {}\n", i + 1));
