@@ -20,7 +20,7 @@ pub struct Oracle {
 }
 
 /// Signature of oracle evaluation function, regardless of the strategy used
-type EvaluationType = fn(&Oracle, &NdState, &NdState, f64, f64) -> (f64, f64);
+type EvaluationType = fn(&Oracle, &NdState, &NdState, f64, f64, f64) -> (f64, f64);
 
 impl Oracle {
     pub fn new(strategy: String, max_thrust: f64, min_sma: f64) -> Self {
@@ -42,6 +42,9 @@ impl Oracle {
         let src_pp = self.propagate(src, src_time);
         let dst_pp = self.propagate(dst, src_time);
 
+        // Pass time constraint into evaluation function (needed for drift)
+        let tmax_nd = self.scalings.to_nondim_time(dst_time - src_time);
+
         // Non-dimensionalize propagated states and physical parameters
         let src_nd = self.scalings.to_nondim_state(&src_pp);
         let dst_nd = self.scalings.to_nondim_state(&dst_pp);
@@ -50,9 +53,9 @@ impl Oracle {
 
         // Evaluate transfer delta-v and delta-t based on selected strategy
         let (dv_nd, dt_nd) = match self.strategy.as_str() {
-            "direct" => self.evaluate_direct(&src_nd, &dst_nd, fmax_nd, amin_nd),
-            "drift" => self.evaluate_drift(&src_nd, &dst_nd, fmax_nd, amin_nd),
-            "best" => self.evaluate_best(&src_nd, &dst_nd, fmax_nd, amin_nd),
+            "direct" => self.evaluate_direct(&src_nd, &dst_nd, fmax_nd, amin_nd, tmax_nd),
+            "drift" => self.evaluate_drift(&src_nd, &dst_nd, fmax_nd, amin_nd, tmax_nd),
+            "best" => self.evaluate_best(&src_nd, &dst_nd, fmax_nd, amin_nd, tmax_nd),
             _ => panic!("Unsupported transfer strategy: {}", self.strategy),
         };
 
@@ -98,7 +101,14 @@ impl Oracle {
     /// Evaluate cost and time of direct transfer between two orbital states
     ///
     /// Note: Inputs and outputs are non-dimensionalized via `Scalings`.
-    fn evaluate_direct(&self, src: &NdState, dst: &NdState, fmax: f64, _amin: f64) -> (f64, f64) {
+    fn evaluate_direct(
+        &self,
+        src: &NdState,
+        dst: &NdState,
+        fmax: f64,
+        _amin: f64,
+        _tmax: f64,
+    ) -> (f64, f64) {
         let dv = dv_qlaw(src, dst, None);
         let dt = dt_qlaw(src, dst, fmax, None);
         (dv, dt)
@@ -109,31 +119,18 @@ impl Oracle {
     /// Evaluate cost and time of drift transfer between two orbital states
     ///
     /// Note: Inputs and outputs are non-dimensionalized via `Scalings`.
-    fn evaluate_drift(&self, src: &NdState, dst: &NdState, fmax: f64, amin: f64) -> (f64, f64) {
-        // TEMPORARY WORKAROUND: will be replaced by more sophisticated
-        // strategy in future. Currently, we try to pick a transfer N times as
-        // long as the direct transfer such that we get we get a
-        // "sufficient decrease" in cost compared to the direct transfer, while
-        // not drifting for too long.
-        // E.g. a 2x increase in ToF should met a >2x decrease in cost to be
-        // worthwhile pick the SHORTEST drift transfer that meets this
-        // criterion (otherwise, use a direct transfer)
+    fn evaluate_drift(
+        &self,
+        src: &NdState,
+        dst: &NdState,
+        fmax: f64,
+        amin: f64,
+        tmax: f64,
+    ) -> (f64, f64) {
+        let (dv, ad, phi, lw) = self.drift_dv_given_dt(src, dst, fmax, amin, tmax);
+        let dt = self.drift_dt(src, dst, fmax, ad, phi, lw);
 
-        let (dv_direct, dt_direct) = self.evaluate_direct(src, dst, fmax, amin);
-
-        let factors = [1.0, 1.25, 1.5, 2.0, 3.0];
-        for &factor in factors.iter() {
-            let tmax = factor * dt_direct;
-            let (dv, ad, phi, lw) = self.drift_dv_given_dt(src, dst, fmax, amin, tmax);
-            let dt = self.drift_dt(src, dst, fmax, ad, phi, lw);
-
-            let perf_ratio = dv / dv_direct * (dt / dt_direct);
-            if perf_ratio < 0.99 {
-                return (dv, dt);
-            }
-        }
-
-        (dv_direct, dt_direct)
+        (dv, dt)
     }
 
     /// Delta-t for drift transfer between states, given maximum thrust
@@ -273,12 +270,19 @@ impl Oracle {
     /// Evaluate cost and time of best transfer between two orbital states
     ///
     /// Note: Inputs and outputs are non-dimensionalized via `Scalings`.
-    fn evaluate_best(&self, src: &NdState, dst: &NdState, fmax: f64, amin: f64) -> (f64, f64) {
+    fn evaluate_best(
+        &self,
+        src: &NdState,
+        dst: &NdState,
+        fmax: f64,
+        amin: f64,
+        tmax: f64,
+    ) -> (f64, f64) {
         let strategies: [EvaluationType; 2] = [Self::evaluate_direct, Self::evaluate_drift];
 
         strategies
             .iter()
-            .map(|f| f(self, src, dst, fmax, amin))
+            .map(|f| f(self, src, dst, fmax, amin, tmax))
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
             .unwrap()
     }
