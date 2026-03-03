@@ -88,7 +88,7 @@ fn test_oracle_evaluate_direct_returns_positive() {
         o: 1.1,
         t: 0.6,
     };
-    let (cost, time) = oracle.evaluate(&s1, &s2, 0.0);
+    let (cost, time) = oracle.evaluate(&s1, &s2, 0.0, f64::INFINITY);
     assert!(cost > 0.0, "Transfer cost should be positive");
     assert!(time > 0.0, "Transfer time should be positive");
 }
@@ -104,7 +104,7 @@ fn test_oracle_evaluate_self_transfer_is_zero() {
         o: 1.0,
         t: 0.5,
     };
-    let (cost, time) = oracle.evaluate(&s, &s, 0.0);
+    let (cost, time) = oracle.evaluate(&s, &s, 0.0, f64::INFINITY);
     assert!(cost.abs() < 1e-6, "Self-transfer cost should be ~0");
     assert!(time.abs() < 1e-6, "Self-transfer time should be ~0");
 }
@@ -128,7 +128,7 @@ fn test_oracle_evaluate_cost_equals_thrust_times_time() {
         o: 1.3,
         t: 0.7,
     };
-    let (cost, time) = oracle.evaluate(&s1, &s2, 0.0);
+    let (cost, time) = oracle.evaluate(&s1, &s2, 0.0, f64::INFINITY);
     let expected_cost = 0.005 * time;
     assert!(
         (cost - expected_cost).abs() < 1e-6,
@@ -155,8 +155,8 @@ fn test_oracle_evaluate_with_nonzero_start_time() {
         o: 1.1,
         t: 0.6,
     };
-    let (cost0, time0) = oracle.evaluate(&s1, &s2, 0.0);
-    let (cost1, time1) = oracle.evaluate(&s1, &s2, 100_000.0);
+    let (cost0, time0) = oracle.evaluate(&s1, &s2, 0.0, f64::INFINITY);
+    let (cost1, time1) = oracle.evaluate(&s1, &s2, 100_000.0, f64::INFINITY);
     // Results differ because orbital propagation shifts RAAN/omega
     assert!(cost0 > 0.0 && cost1 > 0.0);
     assert!(time0 > 0.0 && time1 > 0.0);

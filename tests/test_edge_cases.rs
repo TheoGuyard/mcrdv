@@ -87,8 +87,8 @@ fn test_oracle_different_thrust_levels() {
     let oracle_low = Oracle::new("direct".to_string(), 0.001);
     let oracle_high = Oracle::new("direct".to_string(), 0.01);
 
-    let (cost_low, time_low) = oracle_low.evaluate(&s1, &s2, 0.0);
-    let (cost_high, time_high) = oracle_high.evaluate(&s1, &s2, 0.0);
+    let (cost_low, time_low) = oracle_low.evaluate(&s1, &s2, 0.0, f64::INFINITY);
+    let (cost_high, time_high) = oracle_high.evaluate(&s1, &s2, 0.0, f64::INFINITY);
 
     // Higher thrust → shorter transfer time
     assert!(

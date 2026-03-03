@@ -85,7 +85,7 @@ impl Crossover {
         }
 
         // Infinite value with some slack to avoid overflow in addition
-        let inf = f64::MAX / 4.0;
+        let inf = f64::INFINITY / 4.0;
 
         // memo[s][j] = best penalized cost to collect first j debris with s sequences
         let mut memo = vec![vec![inf; n + 1]; k + 1];

@@ -98,7 +98,7 @@ impl Polisher {
 
                 let t_depart = k as f64 * dt;
                 let (cost, min_time) =
-                    oracle.evaluate(&problem.states[src_idx], &problem.states[dst_idx], t_depart);
+                    oracle.evaluate(&problem.states[src_idx], &problem.states[dst_idx], t_depart, problem.mission_time);
 
                 let l_min = ((t_depart + min_time) / dt).ceil() as usize;
                 if l_min >= num_steps {
@@ -160,6 +160,7 @@ impl Polisher {
                 &problem.states[seq.indices[i - 1]],
                 &problem.states[seq.indices[i]],
                 start_time,
+                problem.mission_time
             );
             new_cost += cost;
             new_times[i] = start_time + time;

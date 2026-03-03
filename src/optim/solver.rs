@@ -289,7 +289,7 @@ impl Solver {
                 .push(avg_time.parse::<f64>().unwrap_or(f64::INFINITY));
             self.trace
                 .avg_load
-                .push(avg_load.parse::<f64>().unwrap_or(f64::MAX));
+                .push(avg_load.parse::<f64>().unwrap_or(f64::INFINITY));
             self.trace
                 .max_time
                 .push(max_time.parse::<f64>().unwrap_or(f64::INFINITY));
