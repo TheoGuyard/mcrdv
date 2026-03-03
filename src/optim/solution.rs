@@ -157,34 +157,64 @@ impl Solution {
 impl fmt::Display for Solution {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Mission plan")?;
-        writeln!(f, "  feasible   : {}", self.is_feasible())?;
-        writeln!(f, "  chasers    : {}", self.nb_sequences)?;
-        writeln!(f, "  total cost : {:.2}", self.total_cost)?;
-        writeln!(f, "  total time : {:.0} sec", self.total_time())?;
-        writeln!(f, "  total load : {}", self.total_load())?;
-        for (i, seq) in self.sequences.iter().enumerate() {
-            if !seq.is_empty() {
-                // Go back to initial indices without depot
-                write!(f, "  Chaser {} → [", i + 1)?;
-                for (pos, &idx) in seq.indices.iter().enumerate() {
-                    if idx == 0 {
-                        write!(f, "depot")?;
-                    } else {
-                        write!(f, "{}", idx + 1)?;
-                    }
-                    if pos < seq.indices.len() - 1 {
-                        write!(f, ", ")?;
-                    }
-                }
-                writeln!(f, "]")?;
+        writeln!(f, "    feasible        : {}", self.is_feasible())?;
+        writeln!(
+            f,
+            "    total cost      : {:>6.2} km/s",
+            self.total_cost / 1000.0
+        )?;
+        writeln!(
+            f,
+            "    mission time    : {:>6.2} days",
+            self.max_time() / 86400.0
+        )?;
+        writeln!(
+            f,
+            "      max time      : {:>6.2} days",
+            self.max_time() / 86400.0
+        )?;
+        writeln!(
+            f,
+            "      min time      : {:>6.2} days",
+            self.min_time() / 86400.0
+        )?;
+        writeln!(
+            f,
+            "      avg time      : {:>6.2} days",
+            self.avg_time() / 86400.0
+        )?;
+        writeln!(f, "    num chasers     : {}", self.nb_sequences)?;
+        writeln!(f, "      max load      : {}", self.max_load())?;
+        writeln!(f, "      min load      : {}", self.min_load())?;
+        writeln!(f, "      avg load      : {:>.2}", self.avg_load())?;
 
-                writeln!(f, "     cost : {:.2}", seq.cost)?;
-                writeln!(f, "     time : {:.0} sec", seq.time)?;
-                if i != self.sequences.iter().len() - 1 {
-                    writeln!(f, "     load : {}", seq.load)?;
+        let mut chaser_id = 0;
+        for seq in self.sequences.iter() {
+            if seq.is_empty() {
+                continue;
+            }
+            chaser_id += 1;
+            writeln!(f, "Chaser {}", chaser_id)?;
+            writeln!(f, "    cost            : {:>6.2} km/s", seq.cost / 1000.0)?;
+            writeln!(f, "    time            : {:>6.2} days", seq.time / 86400.0)?;
+            writeln!(f, "    load            : {}", seq.load)?;
+            writeln!(f, "    Sequence")?;
+            for (j, &idx) in seq.indices.iter().enumerate() {
+                if idx == 0 {
+                    writeln!(f, "        depot")?;
                 } else {
-                    write!(f, "     load : {}", seq.load)?;
+                    writeln!(f, "        debris {}", idx + 1)?;
                 }
+                writeln!(
+                    f,
+                    "            meet time : {:>6.2} days",
+                    seq.times[j] / 86400.0
+                )?;
+                writeln!(
+                    f,
+                    "            meet cost : {:>6.2} km/s",
+                    seq.costs[j] / 1000.0
+                )?;
             }
         }
         Ok(())

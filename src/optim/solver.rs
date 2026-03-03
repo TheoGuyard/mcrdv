@@ -220,11 +220,11 @@ impl Solver {
         println!(
             "{:>8} {:>8} {:>8} | {:>12} {:>12} {:>12} | {:>5} {:>5} {:>5} {:>8} {:>8}",
             "iter",
-            "(last)",
+            "last",
             "time",
-            "delta-v [m/s]",
-            "avg time [s]",
-            "avg load",
+            "cost [km/s]",
+            "avg-t [day]",
+            "avg-l [deb]",
             "feas.",
             "inf.",
             "ratio",
@@ -244,13 +244,13 @@ impl Solver {
         let mut min_load = "--".to_string();
 
         if let Some(sol) = self.population.best_feasible() {
-            best_cost = format!("{:.2}", sol.total_cost);
-            avg_time = format!("{:.2}", sol.avg_time());
-            avg_load = format!("{:.2}", sol.avg_load());
-            max_time = format!("{:.2}", sol.max_time());
-            max_load = format!("{:.0}", sol.max_load());
-            min_time = format!("{:.2}", sol.min_time());
-            min_load = format!("{:.0}", sol.min_load());
+            best_cost = format!("{:>6.2}", sol.total_cost / 1000.0);
+            avg_time = format!("{:>6.2}", sol.avg_time() / 86400.0);
+            avg_load = format!("{:>6.2}", sol.avg_load());
+            max_time = format!("{:>6.2}", sol.max_time() / 86400.0);
+            max_load = format!("{:>6.2}", sol.max_load());
+            min_time = format!("{:>6.2}", sol.min_time() / 86400.0);
+            min_load = format!("{:>6.2}", sol.min_load());
         }
 
         let n_fea = self.population.feasible.solutions.len();
@@ -261,8 +261,26 @@ impl Solver {
             0.0
         };
 
+        let ptime_raw = format!("{:.*e}", 1, self.metric.penalty_time);
+        let ptime = if let Some(pos) = ptime_raw.find('e') {
+            let mantissa = &ptime_raw[..pos];
+            let exponent: i32 = ptime_raw[pos + 1..].parse().unwrap();
+            format!(" {}e{:+03}", mantissa, exponent)
+        } else {
+            ptime_raw
+        };
+
+        let pload_raw = format!("{:.*e}", 1, self.metric.penalty_load);
+        let pload = if let Some(pos) = pload_raw.find('e') {
+            let mantissa = &pload_raw[..pos];
+            let exponent: i32 = pload_raw[pos + 1..].parse().unwrap();
+            format!(" {}e{:+03}", mantissa, exponent)
+        } else {
+            pload_raw
+        };
+
         println!(
-            "{:8} {:8} {:>8.2} | {:>12} {:>12} {:>12} | {:>5} {:>5} {:>5.2} {:>8.2e} {:>8.2e}",
+            "{:8} {:8} {:>8.2} | {:>12} {:>12} {:>12} | {:>5} {:>5} {:>5.2} {} {}",
             iter,
             nimp,
             t0.elapsed().as_secs_f64(),
@@ -272,8 +290,8 @@ impl Solver {
             n_fea,
             n_inf,
             ratio,
-            self.metric.penalty_time,
-            self.metric.penalty_load,
+            ptime,
+            pload,
         );
 
         // Save trace if enabled

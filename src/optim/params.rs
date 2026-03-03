@@ -62,7 +62,7 @@ impl Params {
             },
             search_params: SearchParams { nb_neighbors: 30 },
             polisher_params: PolisherParams {
-                polish_condition: "last".to_string(),
+                polish_condition: "feasible".to_string(),
                 polish_method: "dp".to_string(),
                 dp_time_step: 86_400.0,
             },
