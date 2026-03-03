@@ -61,10 +61,18 @@ impl Generator {
                 let prev = *indices.last().unwrap();
 
                 // Check time constraint (whether we can go to debris and return to depot)
-                let (_, tof_to) =
-                    oracle.evaluate(&problem.states[prev], &problem.states[node], time, problem.mission_time);
-                let (_, tof_back) =
-                    oracle.evaluate(&problem.states[node], &problem.states[0], time + tof_to, problem.mission_time);
+                let (_, tof_to) = oracle.evaluate(
+                    &problem.states[prev],
+                    &problem.states[node],
+                    time,
+                    problem.mission_time,
+                );
+                let (_, tof_back) = oracle.evaluate(
+                    &problem.states[node],
+                    &problem.states[0],
+                    time + tof_to,
+                    problem.mission_time,
+                );
 
                 if time + tof_to + tof_back > problem.mission_time {
                     i += 1; // Continue checking if other debris can be visited
@@ -151,8 +159,12 @@ impl Generator {
 
             available[start_index] = false;
             let mut indices = vec![0, start_index];
-            let (_, mut time) =
-                oracle.evaluate(&problem.states[0], &problem.states[start_index], 0.0, problem.mission_time);
+            let (_, mut time) = oracle.evaluate(
+                &problem.states[0],
+                &problem.states[start_index],
+                0.0,
+                problem.mission_time,
+            );
             let mut load = 1usize;
 
             // Greedily extend the route with nearest feasible neighbor
@@ -173,10 +185,18 @@ impl Generator {
                     }
 
                     // Check time constraint (whether we can go to debris and return to depot)
-                    let (fuel, tof) =
-                        oracle.evaluate(&problem.states[current], &problem.states[node], time, problem.mission_time);
-                    let (_, tof_back) =
-                        oracle.evaluate(&problem.states[node], &problem.states[0], time + tof, problem.mission_time);
+                    let (fuel, tof) = oracle.evaluate(
+                        &problem.states[current],
+                        &problem.states[node],
+                        time,
+                        problem.mission_time,
+                    );
+                    let (_, tof_back) = oracle.evaluate(
+                        &problem.states[node],
+                        &problem.states[0],
+                        time + tof,
+                        problem.mission_time,
+                    );
                     if time + tof + tof_back > problem.mission_time {
                         continue;
                     }

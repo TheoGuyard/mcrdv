@@ -27,7 +27,13 @@ impl Oracle {
     /// Note: if the transfer cannot be completed within the stop time, cost is
     /// set to infinity, and the time returned is the smallest possible time of
     /// flight to make the transfer feasible
-    pub fn evaluate(&self, src: &State, dst: &State, start_time: f64, stop_time: f64) -> (f64, f64) {
+    pub fn evaluate(
+        &self,
+        src: &State,
+        dst: &State,
+        start_time: f64,
+        stop_time: f64,
+    ) -> (f64, f64) {
         // Propagate states to the transfer start time
         let src_prop = self.propagate(src, start_time);
         let dst_prop = self.propagate(dst, start_time);
