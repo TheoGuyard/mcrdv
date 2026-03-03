@@ -39,8 +39,8 @@ pub fn oexx_by_accel(state: &NdState) -> NdState {
         a: axx,
         e: exx,
         i: ixx,
-        o: oxx,
-        O: f64::NAN,
+        O: oxx,
+        o: f64::NAN,
         t: f64::NAN,
     }
 }
@@ -59,13 +59,13 @@ pub fn dv_qlaw(src: &NdState, dst: &NdState, phi: Option<f64>) -> f64 {
         a: src.a - dst.a,
         e: src.e - dst.e,
         i: delta_angle(src.i, dst.i),
-        o: delta_angle(src.o, dst.o),
-        O: f64::NAN,
+        O: delta_angle(src.O, dst.O),
+        o: f64::NAN,
         t: f64::NAN,
     };
 
     if let Some(phi_val) = phi {
-        diff.o *= 1.0 - phi_val;
+        diff.O *= 1.0 - phi_val;
     }
 
     // Maximum rates of change of source state per acceleration unit
@@ -76,7 +76,7 @@ pub fn dv_qlaw(src: &NdState, dst: &NdState, phi: Option<f64>) -> f64 {
     sqnorm += (diff.a / oexx.a).powi(2);
     sqnorm += (diff.e / oexx.e).powi(2);
     sqnorm += (diff.i / oexx.i).powi(2);
-    sqnorm += (diff.o / oexx.o).powi(2);
+    sqnorm += (diff.O / oexx.O).powi(2);
 
     3.0 / 2.0 * sqnorm.sqrt()
 }
