@@ -38,6 +38,10 @@ impl Generator {
     fn random_solution(&self, problem: &Problem, oracle: &Oracle, rng: &mut SmallRng) -> Solution {
         let n = problem.states.len();
 
+        // TEMP FIX: Modify oracle strategy to "direct" for init to avoid drift from eating up all the time
+        let new_oracle = Oracle::new("direct".to_string(), oracle.max_thrust, oracle.min_sma);
+        let oracle = &new_oracle;
+
         // All debris state indices, except chaser start state at index 0
         let mut remaining: Vec<usize> = (1..n).collect();
         remaining.shuffle(rng);
@@ -123,6 +127,10 @@ impl Generator {
     /// Generate an solution using a greedy nearest-neighbor heuristic
     fn greedy_solution(&self, problem: &Problem, oracle: &Oracle, rng: &mut SmallRng) -> Solution {
         let n = problem.states.len();
+
+        // Modify oracle strategy to "direct" for init
+        let new_oracle = Oracle::new("direct".to_string(), oracle.max_thrust, oracle.min_sma);
+        let oracle = &new_oracle;
 
         // All debris state indices, except chaser start state at index 0
         let mut available = vec![true; n];
