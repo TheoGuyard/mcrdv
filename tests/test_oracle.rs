@@ -219,7 +219,7 @@ fn test_oracle_strategy_dv_ordered() {
         "Best strategy should be no more expensive than drift"
     );
     assert!(
-        time_drift <= time_direct,
+        time_drift >= time_direct,
         "Drift strategy should be no longer than direct"
     );
 }

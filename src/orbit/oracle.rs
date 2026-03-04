@@ -74,29 +74,29 @@ impl Oracle {
                 if self.strategy == "drift" {
                     // TEMPORARY HEURISTIC: we probably need a much longer time of flight
                     // to make the drift transfer feasible
-                    return (f64::INFINITY, dt_direct * 2.0);
+                    (f64::INFINITY, dt_direct * 2.0)
                 } else {
                     // strategy == "best"
                     // We can take the direct transfer.
-                    return (dv_direct, dt_direct);
+                    (dv_direct, dt_direct)
                 }
             } else if dv_drift < dv_direct {
                 // Great, drift is both feasible and better!
-                return (dv_drift, dt_drift);
+                (dv_drift, dt_drift)
             } else {
                 // Drift is more expensive than direct but feasible
                 if self.strategy == "drift" {
                     // We have to take the drift transfer even if it's more expensive than direct
-                    return (dv_drift, dt_drift);
+                    (dv_drift, dt_drift)
                 } else {
                     // strategy == "best"
                     // We can take the direct transfer.
-                    return (dv_direct, dt_direct);
+                    (dv_direct, dt_direct)
                 }
             }
         } else {
             // strategy == "direct", so we only evaluate the direct transfer case
-            return (dv_direct, dt_direct);
+            (dv_direct, dt_direct)
         }
     }
 
@@ -105,8 +105,7 @@ impl Oracle {
         // use nondimensional delta-v
         let src_nd = self.scalings.to_nondim_state(src);
         let dst_nd = self.scalings.to_nondim_state(dst);
-        let dv_nd = dv_qlaw(&src_nd, &dst_nd, None);
-        dv_nd
+        dv_qlaw(&src_nd, &dst_nd, None)
     }
 
     /// Propagate orbital elements forward by `dt` seconds
