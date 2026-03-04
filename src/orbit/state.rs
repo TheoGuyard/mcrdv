@@ -83,6 +83,12 @@ impl Scalings {
         sma / self.lu
     }
 
+    /// Convert time in [seconds] to non-dimensionalized time
+    #[inline]
+    pub fn to_nondim_time(&self, time: f64) -> f64 {
+        time / self.tu
+    }
+
     /// Revert non-dimensionalized delta-t to dimensional delta-t in seconds
     #[inline]
     pub fn to_dim_dt(&self, dt_nd: f64) -> f64 {

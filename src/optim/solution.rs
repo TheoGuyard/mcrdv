@@ -212,8 +212,21 @@ impl fmt::Display for Solution {
                 )?;
                 writeln!(
                     f,
-                    "            meet cost : {:>6.2} km/s",
-                    seq.costs[j] / 1000.0
+                    "         segment time : {:>6.2} days",
+                    (if j == 0 {
+                        seq.times[j]
+                    } else {
+                        seq.times[j] - seq.times[j - 1]
+                    }) / 86400.0
+                )?;
+                writeln!(
+                    f,
+                    "         segment cost : {:>6.2} km/s",
+                    (if j == 0 {
+                        seq.costs[j]
+                    } else {
+                        seq.costs[j] - seq.costs[j - 1]
+                    }) / 1000.0
                 )?;
             }
         }
