@@ -1,6 +1,7 @@
-pub mod io;
-pub mod optim;
-pub mod orbit;
 pub mod problem;
-
-pub use problem::Problem;
+pub mod io;
+pub mod inner;
+pub mod middle;
+pub mod orbit;
+pub mod outer;
+pub mod solver;

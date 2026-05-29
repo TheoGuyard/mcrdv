@@ -1,0 +1,1 @@
+- Represent chaser index as usize::MAX

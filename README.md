@@ -8,51 +8,31 @@
 
 
 
-`scorpion` is a solver for coordinating **space debris remediation** with a **fleet of chasers** spacecraft. 
-Given a maximum **mission time** and **load** limit per chaser, it constructs routes to collect debris while optimizing the total fuel consumption (delta-v in `m/s`).
-The codebase is organized into the following modules:
-- `io`: Input/output utilities for reading debris data and writing solutions.
-- `orbit`: Physical oracle to compute transfer costs and times between orbital objects.
-- `optim`: Engine based on the Hybrid Genetic Search (HGS) method to optimize chaser routes.
+`scorpion` is a solver for coordinating **space debris remediation** with a **swarm of chasers** spacecraft. 
+Given a cloud of debris and operational constraints, it constructs sequence of debris to be collected for each chaser while optimizing the mission cost.
 
 
 ## Quickstart
 
-`scorpion` is written in [Rust](https://www.rust-lang.org/). It can be downloaded and built as follows:
+`scorpion` is written in [Rust](https://www.rust-lang.org/). It can be downloaded and run with the following commands:
 
 ```bash
 git clone https://github.com/TheoGuyard/scorpion.git
 cd scorpion
-cargo build
+cargo run
 ```
 
-Tests can be run with `cargo test` to check that everything is working correctly. The main executable can be used as follows:
-
-```bash
-cargo run -- <file_path.csv> [options]
-```
-
-where `<file_path.csv>` is the path to the input file describing the debris objects in `.csv` format (see below for details on the I/O format).
-Details on available options can be listed with `cargo run -- --help`.
-Examples of library usage can be run as `cargo run --example <filename>` where `<filename>` is the name of one of the files in the [example](examples/) folder (without the `.rs` extension).
+which triggers the main entry point of the code in [src/main.rs](src/main.rs), defining the problem instance and solver parameters.
 
 
 ## I/O format
 
-The input of `scorpion` is a `.csv` file with one row per debris object, represented in [Keplerian elements](https://en.wikipedia.org/wiki/Kepler_orbit). The first line must be the following header `a[m],e[prop],i[rad],Omega[rad],omega[rad],theta[rad]`, and each subsequent line contains 6 comma-separated floating-point values for the following parameters with their respective units:
+The input of `scorpion` is a `.csv` file with one row per debris object, represented in [Keplerian elements](https://en.wikipedia.org/wiki/Kepler_orbit). The first line must be the following header `a[m],e[prop],i[rad],r[rad],o[rad],t[rad]`, and each subsequent line contains 6 comma-separated floating-point values for the following parameters with their respective units:
 * `a[m]`: semi-major axis in meters
 * `e[prop]`: eccentricity as a proportion in [0,1]
 * `i[rad]`: inclination in radians
-* `Omega[rad]`: right ascension of ascending node  in radians
-* `omega[rad]`: argument of perigee in radians
-* `theta[rad]`: true anomaly in radians
+* `r[rad]`: right ascension of ascending node  in radians
+* `o[rad]`: argument of perigee in radians
+* `t[rad]`: true anomaly in radians
 
 See the [data](data/) folder for example input files.
-When the `--output-path` option is provided, a plain-text solution file describing the best solution found is written to the specified path.
-
-
-## Solver parameters
-
-When using the main executable, the solver parameters are set via the `--level` flag. This sets them with a given aggressiveness level between `0` (fast, low quality) and `6` (slow, high quality).
-Finer control on the parameters can be achieved when calling the `scorpion` library directly within code.
-See the [Params](src/optim/params.rs) struct for details on the available parameters, and the [examples](examples/) folder for example usage of the library.
