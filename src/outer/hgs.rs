@@ -9,7 +9,7 @@ use tracing::{info, debug};
 
 use crate::inner::InnerLoop;
 use crate::middle::{MiddleBound, MiddleLoop, MiddleOutput};
-use crate::outer::{OuterLoop, OuterOutput};
+use crate::outer::{ConvergencePoint, OuterLoop, OuterOutput};
 use crate::problem::Problem;
 
 // =============================== Parameters ============================== //
@@ -65,13 +65,16 @@ pub struct HgsParams {
     pub time_threshold_factor: f64,
     /// Relaxation factor on the fuel limit for split pruning
     pub fuel_threshold_factor: f64,
-    /// Use cheap middle-loop lower bounds to skip provably non-improving
-    /// candidate evaluations (currently in the crossover split).
+    /// Whether to use cheap middle-loop lower bounds
     pub use_bound_pruning: bool,
+    /// Whether to order chaser plans by average RAAN during crossover
+    pub raan_ordering: bool,
 
     // --- Search ---
     /// Number of neighbors considered in local-search moves
     pub nb_neighbors: usize,
+    /// Number of samples in the orbital-distance proxy evaluation
+    pub neighbor_samples: usize,
 
     // --- Metric ---
     /// Initial load penalty for infeasibility
@@ -132,8 +135,10 @@ impl HgsParams {
             time_threshold_factor: 1.5,
             fuel_threshold_factor: 1.5,
             use_bound_pruning: true,
+            raan_ordering: true,
 
             nb_neighbors: 30,
+            neighbor_samples: 16,
 
             penalty_load_init: 1.0,
             penalty_load_increase: 2.0,
@@ -342,6 +347,22 @@ fn evaluate(
     route.push(chaser);
     route.extend_from_slice(debris);
     middle.solve(&route, inner, problem)
+}
+
+/// Cheap middle-loop lower bound on a chaser route covering `debris`. Mirrors
+/// `evaluate` but calls `MiddleLoop::solve_lb` instead of the costly
+/// `MiddleLoop::solve`, for branch-and-bound style pruning.
+fn evaluate_lb(
+    chaser: usize,
+    debris: &[usize],
+    inner: &dyn InnerLoop,
+    middle: &dyn MiddleLoop,
+    problem: &Problem,
+) -> MiddleBound {
+    let mut route = Vec::with_capacity(debris.len() + 1);
+    route.push(chaser);
+    route.extend_from_slice(debris);
+    middle.solve_lb(&route, inner, problem)
 }
 
 /// Assemble all chaser routes, padding unused ones with empty routes
@@ -1015,14 +1036,18 @@ impl Crossover {
     fn giant_tour(&self, problem: &Problem, ind: &Individual) -> Vec<usize> {
         let mut keys: Vec<(f64, usize)> = Vec::new();
         
-        // Sort routes by average RAAN of visited debris
+        // Sort routes by average RAAN of visited debris. With `raan_ordering`
+        // disabled (ablation), keep the routes in their solution order so the
+        // giant tour carries no orbital structure.
         for (i, route) in ind.routes.iter().enumerate() {
             if route.is_empty() { continue; }
-            let debris = &route.sequence[1..];
-            let avg_raan = debris.iter()
-                .map(|&d| problem.debris[d].r)
-                .sum::<f64>() / debris.len() as f64;
-            keys.push((avg_raan, i));
+            let key = if self.params.raan_ordering {
+                let debris = &route.sequence[1..];
+                debris.iter().map(|&d| problem.debris[d].r).sum::<f64>() / debris.len() as f64
+            } else {
+                i as f64
+            };
+            keys.push((key, i));
         }
         keys.sort_by(|a, b| a.0.total_cmp(&b.0));
 
@@ -1114,7 +1139,6 @@ impl Crossover {
         let fuel_threshold = self.params.fuel_threshold_factor * problem.max_fuel;
 
         // Fill the memoization table
-        let home = problem.num_debris();
         for s in 1..=k {
             for i in (s - 1)..n {
                 let base = memo[s - 1][i];
@@ -1122,33 +1146,17 @@ impl Crossover {
                 // Skip if the previous cost is already infinite
                 if base >= inf { continue; }
 
-                // Running per-leg lower-bound sums for the segment giant[i..=j].
-                let mut fuel_lb = 0.0;
-                let mut time_lb = 0.0;
-
                 for j in i..n {
 
-                    // Lower-bound gate: skip the middle-loop call when even the
-                    // cheap lower bound cannot improve this cell.
+                    // Lower-bound gate: skip the costly middle-loop solve when
+                    // even the cheap middle-loop lower bound cannot improve this
+                    // cell.
                     if self.params.use_bound_pruning {
-                        let leg = if j == i {
-                            inner.solve_lb(home, giant[i], problem)
-                        } else {
-                            inner.solve_lb(giant[j - 1], giant[j], problem)
-                        };
-                        fuel_lb += leg.fuel;
-                        time_lb += leg.time;
-                        let load = j - i + 1;
-                        let bound = MiddleBound {
-                            total_time: time_lb,
-                            total_fuel: fuel_lb,
-                            total_load: load,
-                            cost: problem.cost(time_lb, fuel_lb),
-                        };
+                        let bound = evaluate_lb(0, &giant[i..=j], inner, middle, problem);
                         if base + metric.bound_value(problem, &bound) >= memo[s][j + 1] {
                             // Cannot improve this cell. Stop extending once the
                             // exact load alone exceeds the relaxed threshold.
-                            if load as f64 > load_threshold { break; }
+                            if bound.total_load as f64 > load_threshold { break; }
                             continue;
                         }
                     }
@@ -1217,7 +1225,7 @@ impl Search {
         Self { params: params.clone(), neighbors: Vec::new() }
     }
 
-    /// Precompute the nearest-neighbor lists
+    /// Precompute the nearest-neighbor lists from the orbital-distance proxy.
     pub fn initialize(&mut self, inner: &dyn InnerLoop, problem: &Problem) {
         let n = problem.num_debris();
         self.neighbors = vec![Vec::new(); n];
@@ -1227,13 +1235,31 @@ impl Search {
                 if j == i {
                     continue;
                 }
-                let d = inner.solve(i, j, 0.0, problem).fuel;
-                proxi.push((d, j));
+                proxi.push((self.orbital_distance(i, j, inner, problem), j));
             }
             proxi.sort_by(|a, b| a.0.total_cmp(&b.0));
             let keep = self.params.nb_neighbors.min(proxi.len());
             self.neighbors[i] = proxi[..keep].iter().map(|&(_, j)| j).collect();
         }
+    }
+
+    /// Orbital distance proxy
+    fn orbital_distance(
+        &self,
+        i: usize,
+        j: usize,
+        inner: &dyn InnerLoop,
+        problem: &Problem,
+    ) -> f64 {
+        let m = self.params.neighbor_samples.max(1);
+        let horizon = problem.max_time;
+        let mut acc = 0.0;
+        for s in 0..m {
+            let t = horizon * (s as f64 + 0.5) / m as f64; // midpoint of s-th cell
+            let leg = inner.solve(i, j, t, problem);
+            acc += problem.cost(leg.time, leg.fuel);
+        }
+        acc / m as f64
     }
 
     /// Run local search on a individual
@@ -1424,6 +1450,13 @@ impl Search {
             let mut cand = ind.routes[s].sequence.clone();
             cand.remove(pos);
             cand.insert(insert_at, state);
+            // Lower-bound gate: skip the costly solve when the candidate cannot
+            // improve on the best route value found so far.
+            if self.params.use_bound_pruning
+                && metric.bound_value(problem, &middle.solve_lb(&cand, inner, problem)) >= best_value
+            {
+                continue;
+            }
             let mo = middle.solve(&cand, inner, problem);
             let v = metric.route_value(problem, &mo);
             if v < best_value {
@@ -1464,6 +1497,11 @@ impl Search {
         for t in (pos + 1)..len {
             let mut cand = ind.routes[s].sequence.clone();
             cand.swap(pos, t);
+            if self.params.use_bound_pruning
+                && metric.bound_value(problem, &middle.solve_lb(&cand, inner, problem)) >= best_value
+            {
+                continue;
+            }
             let mo = middle.solve(&cand, inner, problem);
             let v = metric.route_value(problem, &mo);
             if v < best_value {
@@ -1505,6 +1543,11 @@ impl Search {
         for end in (pos + 1)..len {
             let mut cand = ind.routes[s].sequence.clone();
             cand[pos..=end].reverse();
+            if self.params.use_bound_pruning
+                && metric.bound_value(problem, &middle.solve_lb(&cand, inner, problem)) >= best_value
+            {
+                continue;
+            }
             let mo = middle.solve(&cand, inner, problem);
             let v = metric.route_value(problem, &mo);
             if v < best_value {
@@ -1564,12 +1607,19 @@ impl Search {
             // Open route: allow inserting after the last debris (append = new terminal).
             let ins = pos2.min(new2.len());
             new2.insert(ins, state_u);
-            let mo1 = middle.solve(&new1, inner, problem);
-            let mo2 = middle.solve(&new2, inner, problem);
-            let v = metric.route_value(problem, &mo1) + metric.route_value(problem, &mo2);
-            if v < best_value {
-                best_value = v;
-                best = Some((mo1, mo2));
+            // Lower-bound gate on the combined value of the two changed routes.
+            if !(self.params.use_bound_pruning
+                && metric.bound_value(problem, &middle.solve_lb(&new1, inner, problem))
+                    + metric.bound_value(problem, &middle.solve_lb(&new2, inner, problem))
+                    >= best_value)
+            {
+                let mo1 = middle.solve(&new1, inner, problem);
+                let mo2 = middle.solve(&new2, inner, problem);
+                let v = metric.route_value(problem, &mo1) + metric.route_value(problem, &mo2);
+                if v < best_value {
+                    best_value = v;
+                    best = Some((mo1, mo2));
+                }
             }
         }
 
@@ -1580,11 +1630,17 @@ impl Search {
             new1[pos1] = state_v;
             let mut new2 = ind.routes[s2].sequence.clone();
             new2[pos2] = state_u;
-            let mo1 = middle.solve(&new1, inner, problem);
-            let mo2 = middle.solve(&new2, inner, problem);
-            let v = metric.route_value(problem, &mo1) + metric.route_value(problem, &mo2);
-            if v < best_value {
-                best = Some((mo1, mo2));
+            if !(self.params.use_bound_pruning
+                && metric.bound_value(problem, &middle.solve_lb(&new1, inner, problem))
+                    + metric.bound_value(problem, &middle.solve_lb(&new2, inner, problem))
+                    >= best_value)
+            {
+                let mo1 = middle.solve(&new1, inner, problem);
+                let mo2 = middle.solve(&new2, inner, problem);
+                let v = metric.route_value(problem, &mo1) + metric.route_value(problem, &mo2);
+                if v < best_value {
+                    best = Some((mo1, mo2));
+                }
             }
         }
 
@@ -1635,6 +1691,15 @@ impl Search {
         new1.extend_from_slice(&r2[pos2..len2]);
         let mut new2: Vec<usize> = r2[..pos2].to_vec();
         new2.extend_from_slice(&r1[pos1..len1]);
+
+        // Lower-bound gate on the combined value of the two changed routes.
+        if self.params.use_bound_pruning
+            && metric.bound_value(problem, &middle.solve_lb(&new1, inner, problem))
+                + metric.bound_value(problem, &middle.solve_lb(&new2, inner, problem))
+                >= old_value
+        {
+            return false;
+        }
 
         let mo1 = middle.solve(&new1, inner, problem);
         let mo2 = middle.solve(&new2, inner, problem);
@@ -1756,6 +1821,14 @@ impl OuterLoop for Hgs {
         let mut cost = metric.value(population.best());
         let mut iter = 0usize;
         let mut nimp = 0usize;
+
+        // Record the best-cost trajectory at the logging cadence (plus the
+        // initial and final points) for convergence plots.
+        let mut convergence: Vec<ConvergencePoint> = Vec::new();
+        {
+            let b = population.best();
+            convergence.push((t0.elapsed().as_secs_f64(), 0, b.cost, b.is_feasible()));
+        }
         loop {
             // Stopping criteria
             if !problem.has_objective() && population.best_feasible().is_some() { break; }
@@ -1780,18 +1853,24 @@ impl OuterLoop for Hgs {
             }
             
             self.log_iter(t0, iter, nimp, &population, &metric);
+            if self.params.log_iter != 0 && iter.is_multiple_of(self.params.log_iter) {
+                let b = population.best();
+                convergence.push((t0.elapsed().as_secs_f64(), iter, b.cost, b.is_feasible()));
+            }
         }
 
         self.log_foot(t0, iter, nimp, &population, &metric);
 
         // Recover best individual and build output
         let best = population.best();
+        convergence.push((t0.elapsed().as_secs_f64(), iter, best.cost, best.is_feasible()));
         let out = OuterOutput {
             routes: best.routes.clone(),
             cost: best.routes.iter().map(|s| s.cost).sum(),
             feasible: best.routes.iter().all(|s| s.feasible),
+            convergence,
         };
-        
+
         out
     }
 }

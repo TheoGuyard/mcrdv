@@ -102,27 +102,14 @@ pub trait MiddleLoop {
         problem: &Problem,
     ) -> MiddleOutput;
 
-    /// Lower bound middle loop solve call
+    /// Lower bound on the plan cost of a fixed sequence
     fn solve_lb(
         &self,
         sequence: &[usize],
         inner: &dyn InnerLoop,
         problem: &Problem,
     ) -> MiddleBound {
-        let mut total_time = 0.0;
-        let mut total_fuel = 0.0;
-        for i in 1..sequence.len() {
-            let lb = inner.solve_lb(
-                index_at(sequence, i - 1, problem),
-                index_at(sequence, i, problem),
-                problem,
-            );
-            total_time += lb.time;
-            total_fuel += lb.fuel;
-        }
-        let total_load = sequence.len().saturating_sub(1);
-        let cost = problem.cost(total_time, total_fuel);
-        MiddleBound { total_time, total_fuel, total_load, cost }
+        compute_bound(sequence, inner, problem)
     }
 }
 
@@ -134,6 +121,28 @@ pub(crate) fn index_at(sequence: &[usize], pos: usize, problem: &Problem) -> usi
     } else {
         sequence[pos]
     }
+}
+
+/// Sum the per-leg inner-loop lower bounds into a plan-level lower bound
+pub(crate) fn compute_bound(
+    sequence: &[usize],
+    inner: &dyn InnerLoop,
+    problem: &Problem,
+) -> MiddleBound {
+    let mut total_time = 0.0;
+    let mut total_fuel = 0.0;
+    for i in 1..sequence.len() {
+        let lb = inner.solve_lb(
+            index_at(sequence, i - 1, problem),
+            index_at(sequence, i, problem),
+            problem,
+        );
+        total_time += lb.time;
+        total_fuel += lb.fuel;
+    }
+    let total_load = sequence.len().saturating_sub(1);
+    let cost = problem.cost(total_time, total_fuel);
+    MiddleBound { total_time, total_fuel, total_load, cost }
 }
 
 /// Forward inner loop with no waiting time allowed
