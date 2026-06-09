@@ -26,6 +26,9 @@ impl Default for OuterParams {
 }
 
 
+/// Convergence trace
+pub type ConvergencePoint = (f64, usize, f64, bool);
+
 /// Outer loop output
 #[derive(Debug, Clone)]
 pub struct OuterOutput {
@@ -35,6 +38,9 @@ pub struct OuterOutput {
     pub cost: f64,
     /// Mission feasibility
     pub feasible: bool,
+    /// Best-cost trajectory recorded during the search (for convergence plots).
+    /// Empty unless the solver populates it.
+    pub convergence: Vec<ConvergencePoint>,
 }
 
 impl OuterOutput {
