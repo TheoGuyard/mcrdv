@@ -5,11 +5,10 @@ use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
-use tracing::{info, debug};
 
 use crate::inner::InnerLoop;
 use crate::middle::{MiddleBound, MiddleLoop, MiddleOutput};
-use crate::outer::{ConvergencePoint, OuterLoop, OuterOutput};
+use crate::outer::{Trace, OuterLoop, OuterOutput};
 use crate::problem::Problem;
 
 // =============================== Parameters ============================== //
@@ -118,7 +117,7 @@ impl HgsParams {
             max_nimp: 100,
             time_limit: f64::INFINITY,
             log_iter: 10,
-            seed: 42,//Instant::now().elapsed().as_nanos() as u64,
+            seed: Instant::now().elapsed().as_nanos() as u64,
 
             generation: GenerationMethod::Greedy,
             pop_init: 10,
@@ -134,7 +133,7 @@ impl HgsParams {
             load_threshold_factor: 1.5,
             time_threshold_factor: 1.5,
             fuel_threshold_factor: 1.5,
-            use_bound_pruning: true,
+            use_bound_pruning: false,
             raan_ordering: true,
 
             nb_neighbors: 30,
@@ -143,18 +142,18 @@ impl HgsParams {
             penalty_load_init: 1.0,
             penalty_load_increase: 2.0,
             penalty_load_decrease: 0.5,
-            penalty_load_min: 1e-4,
-            penalty_load_max: 1e4,
+            penalty_load_min: 1e-9,
+            penalty_load_max: 1e9,
             penalty_time_init: 1.0,
             penalty_time_increase: 2.0,
             penalty_time_decrease: 0.5,
-            penalty_time_min: 1e-6,
-            penalty_time_max: 1e2,
+            penalty_time_min: 1e-9,
+            penalty_time_max: 1e9,
             penalty_fuel_init: 1.0,
             penalty_fuel_increase: 2.0,
             penalty_fuel_decrease: 0.5,
-            penalty_fuel_min: 1e-2,
-            penalty_fuel_max: 1e4,
+            penalty_fuel_min: 1e-9,
+            penalty_fuel_max: 1e9,
             target_ratio: 0.9,
         }
     }
@@ -1728,13 +1727,13 @@ impl Hgs {
     }
 
     fn log_init(&self) {
-        info!("Solver start");
-        info!("Generating initial population...")
+        println!("Solver start");
+        println!("Generating initial population...")
     }
 
     fn log_head(&self) {
-        info!("Starting generic selection...");
-        info!(
+        println!("Starting generic selection...");
+        println!(
             "{:>10} | {:>10} | {:>10} | {:>10} | {:>10} |",
             "time",
             "iter",
@@ -1750,11 +1749,10 @@ impl Hgs {
         iter: usize,
         nimp: usize,
         population: &Population,
-        metric: &Metric,
     ) {
         if self.params.log_iter != 0 && iter.is_multiple_of(self.params.log_iter) {
             let best = population.best();
-            info!(
+            println!(
                 "{:>10.2} | {:>10} | {:>10} | {:>10.1} | {:>10} |",
                 t0.elapsed().as_secs_f64(),
                 iter,
@@ -1762,14 +1760,6 @@ impl Hgs {
                 best.cost,
                 best.is_feasible()
             );
-            debug!("  num feas: {}", population.feasible.individuals.len());
-            debug!("  num inf : {}", population.infeasible.individuals.len());
-            debug!("  pen time: {:.2e}", metric.penalty_time);
-            debug!("  pen fuel: {:.2e}", metric.penalty_fuel);
-            debug!("  pen load: {:.2e}", metric.penalty_load);
-            debug!("  max time: {:.2e}", best.max_time());
-            debug!("  max fuel: {:.2e}", best.max_fuel());
-            debug!("  max load: {}", best.max_load());
         }
     }
 
@@ -1779,10 +1769,29 @@ impl Hgs {
         iter: usize,
         nimp: usize,
         population: &Population,
-        metric: &Metric,
     ) {
-        self.log_iter(t0, iter, nimp, population, metric);
-        info!("Terminated in {:.2}s and {} iterations ({} non-improving).", t0.elapsed().as_secs_f64(), iter, nimp);
+        self.log_iter(t0, iter, nimp, population);
+        println!("Terminated in {:.2}s and {} iterations ({} non-improving).", t0.elapsed().as_secs_f64(), iter, nimp);
+    }
+
+    fn log_trace(
+        &self, 
+        trace: &mut Trace, 
+        t0: Instant,
+        iter: usize, 
+        population: &Population
+    ) {
+        if self.params.log_iter != 0 && iter.is_multiple_of(self.params.log_iter) {
+            let best = population.best();
+            trace.push(
+                (
+                    t0.elapsed().as_secs_f64(),
+                    iter,
+                    best.cost,
+                    best.is_feasible(),
+                )
+            );
+        }
     }
 }
 
@@ -1822,13 +1831,10 @@ impl OuterLoop for Hgs {
         let mut iter = 0usize;
         let mut nimp = 0usize;
 
-        // Record the best-cost trajectory at the logging cadence (plus the
-        // initial and final points) for convergence plots.
-        let mut convergence: Vec<ConvergencePoint> = Vec::new();
-        {
-            let b = population.best();
-            convergence.push((t0.elapsed().as_secs_f64(), 0, b.cost, b.is_feasible()));
-        }
+        // Algorithm trace
+        let mut trace: Trace = Vec::new();
+        self.log_trace(&mut trace, t0, iter, &population);
+        
         loop {
             // Stopping criteria
             if !problem.has_objective() && population.best_feasible().is_some() { break; }
@@ -1852,23 +1858,21 @@ impl OuterLoop for Hgs {
                 iter += 1;
             }
             
-            self.log_iter(t0, iter, nimp, &population, &metric);
-            if self.params.log_iter != 0 && iter.is_multiple_of(self.params.log_iter) {
-                let b = population.best();
-                convergence.push((t0.elapsed().as_secs_f64(), iter, b.cost, b.is_feasible()));
-            }
+            self.log_iter(t0, iter, nimp, &population);
+            self.log_trace(&mut trace, t0, iter, &population);
         }
 
-        self.log_foot(t0, iter, nimp, &population, &metric);
+        self.log_foot(t0, iter, nimp, &population);
+        self.log_trace(&mut trace, t0, iter, &population);
 
         // Recover best individual and build output
         let best = population.best();
-        convergence.push((t0.elapsed().as_secs_f64(), iter, best.cost, best.is_feasible()));
+
         let out = OuterOutput {
             routes: best.routes.clone(),
             cost: best.routes.iter().map(|s| s.cost).sum(),
             feasible: best.routes.iter().all(|s| s.feasible),
-            convergence,
+            trace: trace,
         };
 
         out

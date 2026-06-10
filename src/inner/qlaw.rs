@@ -79,7 +79,7 @@ pub struct QlawParams {
 impl Default for QlawParams {
     fn default() -> Self {
         Self {
-            max_thrust: 3.0e-3,
+            max_thrust: 0.003,
             lb_steps: 8,
         }
     }

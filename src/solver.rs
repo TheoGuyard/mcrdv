@@ -1,11 +1,10 @@
 use std::fmt;
 
 use serde::Serialize;
-use tracing::{info, warn};
 
 use crate::inner::{InnerLoop, InnerParams};
 use crate::middle::{MiddleLoop, MiddleParams};
-use crate::outer::{OuterLoop, OuterOutput, OuterParams};
+use crate::outer::{Trace, OuterLoop, OuterOutput, OuterParams};
 use crate::problem::Problem;
 
 /// Solver parameters partitioned by inner, middle, and outer loop
@@ -243,26 +242,26 @@ impl Solver {
     }
 
     /// Solve a problem instance
-    pub fn solve(&self, problem: &Problem) -> Solution {
-        info!("Problem summary");
-        info!("  debris         : {}", problem.num_debris());
-        info!("  chasers        : {}", problem.num_chasers);
-        info!("  max time [  s] : {:.1}", problem.max_time);
-        info!("  max fuel [m/s] : {:.2}", problem.max_fuel);
-        info!("  max load [deb] : {}", problem.max_load);
-        info!("  factor time    : {:.3}", problem.factor_time);
-        info!("  factor fuel    : {:.3}", problem.factor_fuel);
+    pub fn solve(&self, problem: &Problem) -> (Solution, Trace) {
+        println!("Problem summary");
+        println!("  debris         : {}", problem.num_debris());
+        println!("  chasers        : {}", problem.num_chasers);
+        println!("  max time [  s] : {:.1}", problem.max_time);
+        println!("  max fuel [m/s] : {:.2}", problem.max_fuel);
+        println!("  max load [deb] : {}", problem.max_load);
+        println!("  factor time    : {:.3}", problem.factor_time);
+        println!("  factor fuel    : {:.3}", problem.factor_fuel);
 
         if !problem.has_objective() {
-            info!("No objective is set, only searching a feasible solution.");
+            println!("warning: no objective is set, only searching a feasible solution.");
         }
 
         let out = self
             .outer
             .solve(self.inner.as_ref(), self.middle.as_ref(), problem);
 
-        if !out.feasible { warn!("no feasible solution found"); }
+        if !out.feasible { println!("warning: no feasible solution found"); }
 
-        Solution::new(&out)
+        (Solution::new(&out), out.trace)
     }
 }

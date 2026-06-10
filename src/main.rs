@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     // Define problem data
-    let debris_path = "data/iridium33.csv";
+    let debris_path = "data/odrc.csv";
     let max_time    = 365.0 * 86_400.0;     // [s]
     let max_fuel    = f64::INFINITY;        // [m/s]
     let max_load    = 5;                    // [debris]
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let solver = Solver::new(&params);
 
     // Solve problem
-    let solution = solver.solve(&problem);
+    let (solution, _trace) = solver.solve(&problem);
 
     println!("{solution}");
 

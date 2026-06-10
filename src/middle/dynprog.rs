@@ -22,15 +22,18 @@ pub enum TimeGrid {
 pub struct DynProgParams {
     /// Whether waiting is allowed
     pub allow_waiting: bool,
-    /// Time discretization mode
-    pub time_grid: TimeGrid,
+    /// Time grid steps
+    pub grid_steps: usize,
+    /// Whether to add departure hints
+    pub departure_hints: bool,
 }
 
 impl Default for DynProgParams {
     fn default() -> Self {
         Self {
             allow_waiting: true,
-            time_grid: TimeGrid::Auto { coarse_steps: 12 },
+            grid_steps: 12,
+            departure_hints: true,
         }
     }
 }
@@ -71,39 +74,28 @@ impl DynProg {
 
     /// Departure time grid construction
     fn epochs(&self, sequence: &[usize], inner: &dyn InnerLoop, problem: &Problem) -> Vec<f64> {
-        match &self.params.time_grid {
-            
-            // Uniform grid
-            TimeGrid::Fixed(step) => {
-                let kmax = (problem.max_time / step).floor() as usize + 1;
-                (0..kmax).map(|k| k as f64 * step).collect()
-            }
-            
-            // Coarse uniform grid plus departure hints
-            TimeGrid::Auto { coarse_steps } => {
-                let steps = (*coarse_steps).max(1);
-                let mut epochs: Vec<f64> = Vec::with_capacity(steps + 1);
+        let steps = (self.params.grid_steps).max(1);
+        let mut epochs: Vec<f64> = Vec::with_capacity(steps + 1);
 
-                // Coarse uniform grid
-                for j in 0..=steps {
-                    epochs.push(j as f64 / steps as f64 * problem.max_time);
-                }
-
-                // Departure hints per leg 
-                let n = sequence.len();
-                for i in 0..n - 1 {
-                    let src = index_at(sequence, i, problem);
-                    let dst = index_at(sequence, i + 1, problem);
-                    epochs.extend(inner.departure_hints(src, dst, problem.max_time, problem));
-                }
-
-                // Sort and drop near-duplicates
-                let eps = problem.max_time * 1e-6;
-                epochs.sort_unstable_by(f64::total_cmp);
-                epochs.dedup_by(|a, b| (*a - *b).abs() <= eps);
-                epochs
-            }
+        // Uniform grid
+        for j in 0..=steps {
+            epochs.push(j as f64 / steps as f64 * problem.max_time);
         }
+
+        // Departure hints
+        if self.params.departure_hints {
+            let n = sequence.len();
+            for i in 0..n - 1 {
+                let src = index_at(sequence, i, problem);
+                let dst = index_at(sequence, i + 1, problem);
+                epochs.extend(inner.departure_hints(src, dst, problem.max_time, problem));
+            }
+            let eps = problem.max_time * 1e-6;
+            epochs.sort_unstable_by(f64::total_cmp);
+            epochs.dedup_by(|a, b| (*a - *b).abs() <= eps);
+        }
+        
+        epochs
     }
 
     /// Run the waiting dynamic program over the precomputed departure grid
@@ -273,6 +265,7 @@ impl MiddleLoop for DynProg {
     }
 
     fn solve_lb(&self, sequence: &[usize], inner: &dyn InnerLoop, problem: &Problem) -> MiddleBound {
+
         // Serve from cache when available
         if let Some(bound) = self.memo_lb.borrow().get(sequence) {
             return *bound;
