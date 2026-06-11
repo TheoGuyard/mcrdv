@@ -15,10 +15,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     // Define problem data
-    let debris_path = "data/odrc.csv";
+    let debris_path = "data/cosmos2251.csv";
     let max_time    = 365.0 * 86_400.0;     // [s]
-    let max_fuel    = f64::INFINITY;        // [m/s]
-    let max_load    = 5;                    // [debris]
+    let max_fuel    = 25_000.0;             // [m/s]
+    let max_load    = 10;                   // [debris]
     let factor_time = 0.0;                  // [1/s]
     let factor_fuel = 1.0;                  // [s/m]
 

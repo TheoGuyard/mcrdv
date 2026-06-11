@@ -25,13 +25,56 @@ MODULES = ["rust"]
 
 # ----- Job definitions ----- #
 
+DATASETS = {
+    "cosmos1408.csv": {
+        "num_debris"    : 4,
+        "max_time"      : 365 * 24 * 3_600.0,
+        "max_fuel"      : 25_000.0,
+        "max_load"      : 10,
+        "chaser_init"   : "centroid",
+        "chaser_load"   : 1.5,
+    },
+    "odrc.csv": {
+        "num_debris"    : 13,
+        "max_time"      : 365 * 24 * 3_600.0,
+        "max_fuel"      : 25_000.0,
+        "max_load"      : 10,
+        "chaser_init"   : "centroid",
+        "chaser_load"   : 1.5,
+    },
+    "iridium33.csv": {
+        "num_debris"    : 110,
+        "max_time"      : 365 * 24 * 3_600.0,
+        "max_fuel"      : 25_000.0,
+        "max_load"      : 10,
+        "chaser_init"   : "centroid",
+        "chaser_load"   : 1.5,
+    },
+    "cosmos2251.csv": {
+        "num_debris"    : 583,
+        "max_time"      : 365 * 24 * 3_600.0,
+        "max_fuel"      : 25_000.0,
+        "max_load"      : 10,
+        "chaser_init"   : "centroid",
+        "chaser_load"   : 1.5,
+    },
+    "fengyun1C.csv": {
+        "num_debris"    : 1_847,
+        "max_time"      : 365 * 24 * 3_600.0,
+        "max_fuel"      : 25_000.0,
+        "max_load"      : 10,
+        "chaser_init"   : "centroid",
+        "chaser_load"   : 1.5,
+    }
+}
+
 JOB_ARRAYS = [
 
     # -------------------- Test experiment -------------------- #
     
     {
         "name"      : "simple",
-        "walltime"  : "01:15:00",
+        "walltime"  : "00:05:00",
         "memory"    : f"{1 * 1024:d}M",
         "cpus"      : 1,
         "save"      : False,
@@ -42,13 +85,13 @@ JOB_ARRAYS = [
                 },
                 "problem"   : {
                     "path"          : "data/iridium33.csv",
-                    "max_time"      : 31536000.0,
-                    "max_fuel"      : None,
-                    "max_load"      : 5,
+                    "max_time"      : 365 * 24 * 3600.0,
+                    "max_fuel"      : 25_000.0,
+                    "max_load"      : 10,
                     "factor_time"   : 0.0,
                     "factor_fuel"   : 1.0,
                     "chaser_init"   : "centroid",
-                    "chaser_load"   : 1.25
+                    "chaser_load"   : 1.5
                 },
                 "solver"    : {
                     "type"          : "scorpion",
@@ -70,13 +113,72 @@ JOB_ARRAYS = [
                         "outer" : {
                             "type"  : "hgs",
                             "args"  : {
-                                "preset"            : 5,
-                                "time_limit"        : 3600.0
+                                "seed"              : 42,
+                                "preset"            : 6,
+                                "time_limit"        : 6 * 3_600.0,
+                                "generation"        : "greedy",
                             }
                         }
                     }
                 }
             }
+        ],
+    },
+
+    # -------------------- Analysis experiment -------------------- #
+    
+    {
+        "name"      : "analysis",
+        "walltime"  : "06:30:00",
+        "memory"    : f"{8 * 1024:d}M",
+        "cpus"      : 8,
+        "save"      : True,
+        "configs"   : [
+            {
+                "experiment": {
+                    "name"          : "analysis",
+                },
+                "problem"   : {
+                    "path"          : "data/" + dataset_name,
+                    "max_time"      : dataset_params["max_time"],
+                    "max_fuel"      : dataset_params["max_fuel"],
+                    "max_load"      : dataset_params["max_load"],
+                    "factor_time"   : factor_time,
+                    "factor_fuel"   : factor_fuel,
+                    "chaser_init"   : dataset_params["chaser_init"],
+                    "chaser_load"   : dataset_params["chaser_load"]
+                },
+                "solver"    : {
+                    "type"          : "scorpion",
+                    "args"          : {
+                        "inner" : {
+                            "type"  : "qlaw",
+                            "args"  : {
+                                "max_thrust"        : 0.003
+                            }
+                        },
+                        "middle": {
+                            "type"  : "dynprog",
+                            "args"  : {
+                                "allow_waiting"     : True,
+                                "grid_steps"        : 12,
+                                "departure_hints"   : True,
+                            }
+                        },
+                        "outer" : {
+                            "type"  : "hgs",
+                            "args"  : {
+                                "seed"              : 42,
+                                "preset"            : 6,
+                                "time_limit"        : 6 * 3_600.0,
+                                "generation"        : "greedy",
+                            }
+                        }
+                    }
+                }
+            }
+            for dataset_name, dataset_params in DATASETS.items()
+            for (factor_time, factor_fuel) in [(0.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
         ],
     },
 ]
@@ -145,6 +247,7 @@ def send():
             "rsync -amv",
             "--exclude '.DS_Store'",
             "--exclude '.git'",
+            "--exclude 'target'",
             "--exclude '**/results/*.json'",
             "{} {}".format(LOC_PATH, REM_PATH),
         ]

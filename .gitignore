@@ -1,5 +1,6 @@
 .vscode
 .DS_Store
+.claude
 
 # Rust
 debug
@@ -7,6 +8,13 @@ target
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
+
+# Python
+.venv/
+__pycache__/
+*.py[codz]
+*$py.class
+
 
 # Experiments
 exp/results/*

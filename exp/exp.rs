@@ -15,7 +15,7 @@ use scorpion::io::load_states;
 use scorpion::middle::dynprog::DynProgParams;
 use scorpion::middle::MiddleParams;
 use scorpion::orbit::centroid;
-use scorpion::outer::hgs::HgsParams;
+use scorpion::outer::hgs::{HgsParams, GenerationMethod};
 use scorpion::outer::{OuterParams, Trace};
 use scorpion::problem::Problem;
 use scorpion::solver::{Params, Solution, Solver};
@@ -62,8 +62,11 @@ pub enum ScorpionOuter {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScorpionHgs {
-    pub preset: usize,
+    pub preset: Option<usize>,
+    pub seed: Option<u64>,
     pub time_limit: Option<f64>,
+    pub generation: Option<String>,
+    pub raan_ordering: Option<bool>,
 }
 
 
@@ -159,9 +162,25 @@ fn build_solver(cfg: &ConfigSolver) -> Result<Solver, Box<dyn Error>> {
     // Outer loop
     let outer = match &scorpion.outer {
         ScorpionOuter::Hgs(p) => {
-            let mut params = HgsParams::preset(p.preset);
+            let mut params = match p.preset {
+                Some(preset) => HgsParams::preset(preset),
+                None => HgsParams::default(),
+            };            
+            if let Some(seed) = p.seed {
+                params.seed = seed;
+            }
             if let Some(time_limit) = p.time_limit {
                 params.time_limit = time_limit;
+            }
+            if let Some(generation) = &p.generation {
+                params.generation = match generation.as_str() {
+                    "greedy" => GenerationMethod::Greedy,
+                    "random" => GenerationMethod::Random,
+                    _ => return Err(format!("unknown generation '{}'", generation).into()),
+                };
+            }
+            if let Some(raan_ordering) = p.raan_ordering {
+                params.raan_ordering = raan_ordering;
             }
             OuterParams::Hgs(params)
         }

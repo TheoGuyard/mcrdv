@@ -1,12 +1,12 @@
 {
   "experiment": {
-    "name": "test"
+    "name": "sensitivity"
   },
   "problem": {
-    "path": "data/iridium33.csv",
+    "path": "data/odrc.csv",
     "max_time": 31536000.0,
-    "max_fuel": null,
-    "max_load": 5,
+    "max_fuel": 25000.0,
+    "max_load": 10,
     "factor_time": 0.0,
     "factor_fuel": 1.0,
     "chaser_init": "centroid",
@@ -33,7 +33,9 @@
         "type": "hgs",
         "args": {
           "preset": 5,
-          "time_limit": 60.0
+          "time_limit": 60.0,
+          "generation": "greedy",
+          "raan_ordering": true
         }
       }
     }
