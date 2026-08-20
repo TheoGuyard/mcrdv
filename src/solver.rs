@@ -1,267 +1,102 @@
-use std::fmt;
+//! Solver for the active debris removal mission planning problem.
 
-use serde::Serialize;
+use std::any::Any;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::Instant;
 
-use crate::inner::{InnerLoop, InnerParams};
-use crate::middle::{MiddleLoop, MiddleParams};
-use crate::outer::{Trace, OuterLoop, OuterOutput, OuterParams};
-use crate::problem::Problem;
+use crate::problem::{ChaserPlan, MissionPlan};
 
-/// Solver parameters partitioned by inner, middle, and outer loop
-#[derive(Debug, Clone, Default)]
-pub struct Params {
-    pub inner: InnerParams,
-    pub middle: MiddleParams,
-    pub outer: OuterParams,
+// ========================================================================= //
+// Layers
+// ========================================================================= //
+
+
+/// Abstract layer to evaluate the time and cost of a transfer.
+pub trait TransferLayer {
+    /// Prepare the layer before start of a solve.
+    fn initialize(&self) -> ();
+
+    /// Return `(time, cost)` of transfer `i -> j` departing at time `t`.
+    fn evaluate(&self, i: usize, j: usize, t: f64) -> (f64, f64);
+
+    /// Lower bound on `(time, cost)` of transfer `i -> j` over time horizon.
+    fn evaluate_lb(&self, i: usize, j: usize) -> (f64, f64);
+
+    /// Departure times of transfer `i -> j` where the cost is locally minimal.
+    fn hints(&self, i: usize, j: usize) -> Rc<Vec<f64>>;
+
+    /// Get the layer statistics.
+    fn statistics(&self) -> HashMap<String, Box<dyn Any>>;
 }
 
-/// Solver solution details
-#[derive(Debug, Clone, Serialize)]
-pub struct Solution {
-    /// Per-chaser route `[chaser, debris_1, ..., debris_n]`
-    pub sequences: Vec<Vec<usize>>,
-    /// Per-chaser waiting times [s]
-    pub waits: Vec<Vec<f64>>,
-    /// Per-chaser transfer times [s]
-    pub times: Vec<Vec<f64>>,
-    /// Per-chaser meeting times [s]
-    pub meets: Vec<Vec<f64>>,
-    /// Per-chaser fuels [m/s]
-    pub fuels: Vec<Vec<f64>>,
-    /// Per-chaser total waiting time [s]
-    pub total_waits: Vec<f64>,
-    /// Per-chaser total transfer time [s]
-    pub total_times: Vec<f64>,
-    /// Per-chaser total fuel [m/s]
-    pub total_fuels: Vec<f64>,
-    /// Per-chaser total load [debris]
-    pub total_loads: Vec<usize>,
-    /// Per-chaser objective costs
-    pub costs: Vec<f64>,
-    /// Per-chaser feasibility
-    pub feasibilities: Vec<bool>,
-    /// Mission cost
-    pub cost: f64,
-    /// Mission feasibility
-    pub feasible: bool,
-    /// Number of active chasers
-    pub active_chasers: usize,
+/// Abstract layer to evaluate the chaser plan of a fixed node sequence.
+pub trait ScheduleLayer {
+    /// Prepare the layer before start of a solve.
+    fn initialize(&self) {}
+
+    /// Evaluate the chaser plan for a fixed sequence of node indices.
+    fn evaluate(&self, seq: &[usize]) -> Rc<ChaserPlan>;
+
+    /// Evaluate lower bound on a plan cost for a fixed sequence of node indices.
+    fn evaluate_lb(&self, seq: &[usize]) -> f64;
+
+    /// Get the layer statistics.
+    fn statistics(&self) -> HashMap<String, Box<dyn Any>>;
 }
 
-impl Solution {
-    pub fn new(outer: &OuterOutput) -> Self {
-        let k = outer.routes.len();
-        let mut sequences = Vec::with_capacity(k);
-        let mut waits = Vec::with_capacity(k);
-        let mut times = Vec::with_capacity(k);
-        let mut meets = Vec::with_capacity(k);
-        let mut fuels = Vec::with_capacity(k);
-        let mut total_waits = Vec::with_capacity(k);
-        let mut total_times = Vec::with_capacity(k);
-        let mut total_fuels = Vec::with_capacity(k);
-        let mut total_loads = Vec::with_capacity(k);
-        let mut costs = Vec::with_capacity(k);
-        let mut feasibilities = Vec::with_capacity(k);
-        let mut active_chasers = 0;
+/// Abstract layer to evaluate a full mission plan of a problem.
+pub trait SequenceLayer {
+    /// Prepare the layer before start of a solve.
+    fn initialize(&self) {}
 
-        for mo in &outer.routes {
-            if !mo.is_empty() {
-                active_chasers += 1;
-            }
-            sequences.push(mo.sequence.clone());
-            waits.push(mo.wait.clone());
-            times.push(mo.time.clone());
-            meets.push(mo.meet.clone());
-            fuels.push(mo.fuel.clone());
-            total_waits.push(mo.total_wait);
-            total_times.push(mo.total_time);
-            total_fuels.push(mo.total_fuel);
-            total_loads.push(mo.total_load);
-            costs.push(mo.cost);
-            feasibilities.push(mo.feasible);
-        }
+    /// Evaluate a mission plan, reporting progress through `logger`.
+    fn evaluate(&self) -> MissionPlan;
 
+    /// Get the layer statistics.
+    fn statistics(&self) -> HashMap<String, Box<dyn Any>>;
+}
+
+// ========================================================================= //
+// Solver
+// ========================================================================= //
+
+pub struct Solver<'a> {
+    pub transfer: &'a dyn TransferLayer,
+    pub schedule: &'a dyn ScheduleLayer,
+    pub sequence: &'a dyn SequenceLayer,
+    pub verbose: bool,
+}
+
+impl<'a> Solver<'a> {
+    pub fn new(
+        transfer: &'a dyn TransferLayer,
+        schedule: &'a dyn ScheduleLayer,
+        sequence: &'a dyn SequenceLayer,
+        verbose: bool,
+    ) -> Self {
         Self {
-            sequences,
-            waits,
-            times,
-            meets,
-            fuels,
-            total_waits,
-            total_times,
-            total_fuels,
-            total_loads,
-            costs,
-            feasibilities,
-            cost: outer.cost,
-            feasible: outer.feasible,
-            active_chasers,
+            transfer,
+            schedule,
+            sequence,
+            verbose,
         }
     }
-}
 
-impl fmt::Display for Solution {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "============================ Mission plan ============================")?;
-        writeln!(f, "Mission feasible : {:>10}", self.feasible)?;
-        writeln!(f, "Mission cost     : {:>10.1}", self.cost)?;
-        writeln!(f, "Mission chasers  : {:>10}", self.active_chasers)?;
+    /// Solve the problem and return the best mission plan found.
+    pub fn solve(&self) -> MissionPlan {
+        let start = Instant::now();
+
+        if self.verbose { println!("Initializing layers..."); }
+        self.transfer.initialize();
+        self.schedule.initialize();
+        self.sequence.initialize();
+        if self.verbose { println!("Layers initialized in {:.1} sec", start.elapsed().as_secs_f64()); }
         
-        // Per-chaser [min | avg | max| tot] over active chasers
-        let active: Vec<usize> = (0..self.total_loads.len())
-            .filter(|&i| self.total_loads[i] > 0)
-            .collect();
-        let stats = |vals: &[f64]| -> (f64, f64, f64, f64) {
-            if active.is_empty() {
-                return (0.0, 0.0, 0.0, 0.0);
-            }
-            let (mut min, mut max, mut sum) = (f64::INFINITY, f64::NEG_INFINITY, 0.0);
-            for &i in &active {
-                min = min.min(vals[i]);
-                max = max.max(vals[i]);
-                sum += vals[i];
-            }
-            (min, sum / active.len() as f64, max, sum)
-        };
-        // Wall-clock mission time per chaser = final meeting epoch.
-        let mission_times: Vec<f64> =
-            self.meets.iter().map(|m| *m.last().unwrap_or(&0.0)).collect();
-        let (t_min, t_avg, t_max, t_tot) = stats(&mission_times);
-        let (f_min, f_avg, f_max, f_tot) = stats(&self.total_fuels);
-        let loads_f64: Vec<f64> = self.total_loads.iter().map(|&l| l as f64).collect();
-        let (l_min, l_avg, l_max, l_tot) = stats(&loads_f64);
-
-        writeln!(
-            f,
-            "Mission specs    : [{:>10} | {:>10} | {:>10} | {:>10}]",
-            "min",
-            "avg",
-            "max",
-            "tot"
-        )?;
-        writeln!(
-            f,
-            "     time [  s]  : [{:>10.1} | {:>10.1} | {:>10.1} | {:>10.1}]",
-            t_min,
-            t_avg,
-            t_max,
-            t_tot
-        )?;
-        writeln!(
-            f,
-            "     fuel [m/s]  : [{:>10.1} | {:>10.1} | {:>10.1} | {:>10.1}]",
-            f_min,
-            f_avg,
-            f_max,
-            f_tot
-        )?;
-        writeln!(
-            f,
-            "     load [deb]  : [{:>10.0} | {:>10.1} | {:>10.0} | {:>10.0}]",
-            l_min,
-            l_avg,
-            l_max,
-            l_tot
-        )?;
-
-        writeln!(f)?;
-
-        for id in 0..self.sequences.len() {
-
-            let seq = &self.sequences[id];
-
-            if seq.len() <= 1 {
-                continue;
-            }
-
-            let n = seq.len();
-            writeln!(
-                f,
-                "Route {} (feasible: {}, cost: {:.1})", 
-                id, 
-                self.feasibilities[id], 
-                self.costs[id]
-            )?;
-            writeln!(
-                f,
-                "  {:<8} {:<8} {:>12} {:>12} {:>12}",
-                "src",
-                "dst",
-                "depart [s]",
-                "arrive [s]",
-                "fuel [m/s]",
-            )?;
-
-            let mut cum_fuel = 0.0;
-
-            for i in 1..n {
-                let src = if i == 1 {
-                    "C   ".to_string()
-                } else {
-                    format!("D{:<3}", seq[i - 1])
-                };
-                // Open route: every destination is a debris (no return home).
-                let dst = format!("D{:<3}", seq[i]);
-
-                // depart from previous stop = meeting epoch − this leg's transfer.
-                let depart = self.meets[id][i] - self.times[id][i];
-                let arrive = self.meets[id][i];
-                cum_fuel += self.fuels[id][i];
-                writeln!(
-                    f,
-                    "  {:<8} {:<8} {:>12.1} {:>12.1} {:>12.2}",
-                    src,
-                    dst,
-                    depart,
-                    arrive,
-                    cum_fuel,
-                )?;
-            }
-        }
-        writeln!(f, "======================================================================")?;
+        if self.verbose { println!("Stating solver..."); }
+        let solution = self.sequence.evaluate();
+        if self.verbose { println!("Solver finished in {:.1} sec", start.elapsed().as_secs_f64()); }
         
-        Ok(())
-    }
-}
-
-
-/// Multi-chaser active debris removal solver
-pub struct Solver {
-    inner: Box<dyn InnerLoop>,
-    middle: Box<dyn MiddleLoop>,
-    outer: Box<dyn OuterLoop>,
-}
-
-impl Solver {
-    pub fn new(params: &Params) -> Self {
-        Self {
-            inner: params.inner.build(),
-            middle: params.middle.build(),
-            outer: params.outer.build(),
-        }
-    }
-
-    /// Solve a problem instance
-    pub fn solve(&self, problem: &Problem) -> (Solution, Trace) {
-        println!("Problem summary");
-        println!("  debris         : {}", problem.num_debris());
-        println!("  chasers        : {}", problem.num_chasers);
-        println!("  max time [  s] : {:.1}", problem.max_time);
-        println!("  max fuel [m/s] : {:.2}", problem.max_fuel);
-        println!("  max load [deb] : {}", problem.max_load);
-        println!("  factor time    : {:.3}", problem.factor_time);
-        println!("  factor fuel    : {:.3}", problem.factor_fuel);
-
-        if !problem.has_objective() {
-            println!("warning: no objective is set, only searching a feasible solution.");
-        }
-
-        let out = self
-            .outer
-            .solve(self.inner.as_ref(), self.middle.as_ref(), problem);
-
-        if !out.feasible { println!("warning: no feasible solution found"); }
-
-        (Solution::new(&out), out.trace)
+        solution
     }
 }
