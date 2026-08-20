@@ -1,10 +1,6 @@
 .vscode
 .DS_Store
-
-examples/*.txt
-
-experiments/results/*
-!experiments/results/.gitkeep
+.claude
 
 # Rust
 debug
@@ -12,3 +8,14 @@ target
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
+
+# Python
+.venv/
+__pycache__/
+*.py[codz]
+*$py.class
+
+
+# Experiments
+exp/results/*
+!exp/results/.gitkeep

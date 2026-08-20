@@ -2,14 +2,12 @@
 name = "scorpion"
 version = "0.1.0"
 edition = "2021"
-description = "Active debris removal mission planner"
+description = "Sequencing via Combinatorial Optimization for Rendezvous Planning and Intelligent Orbital Navigation"
 
 [dependencies]
 csv = "1.3"
-rand = { version = "0.8", features = ["small_rng"] }
 serde = { version = "1", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = { version = "0.8", features = ["small_rng"] }
 
 [lib]
 name = "scorpion"

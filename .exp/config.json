@@ -1,0 +1,43 @@
+{
+  "experiment": {
+    "name": "sensitivity"
+  },
+  "problem": {
+    "path": "data/odrc.csv",
+    "max_time": 31536000.0,
+    "max_fuel": 25000.0,
+    "max_load": 10,
+    "factor_time": 0.0,
+    "factor_fuel": 1.0,
+    "chaser_init": "centroid",
+    "chaser_load": 1.5
+  },
+  "solver": {
+    "type": "scorpion",
+    "args": {
+      "inner": {
+        "type": "qlaw",
+        "args": {
+          "max_thrust": 0.003
+        }
+      },
+      "middle": {
+        "type": "dynprog",
+        "args": {
+          "allow_waiting": true,
+          "grid_steps": 12,
+          "departure_hints": true
+        }
+      },
+      "outer": {
+        "type": "hgs",
+        "args": {
+          "preset": 5,
+          "time_limit": 60.0,
+          "generation": "greedy",
+          "raan_ordering": true
+        }
+      }
+    }
+  }
+}
