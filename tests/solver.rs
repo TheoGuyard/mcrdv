@@ -1,89 +1,129 @@
-//! Component tests for the `Solver` wiring and objective aggregation.
+//! The three layers wired together, end to end.
 
 mod common;
 
-use common::*;
-use scorpion::orbit::DAY;
-use scorpion::problem::{make_problem, MissionPlan, Objective, ObjectiveMax, ObjectiveSum, Problem};
-use scorpion::schedule::CdConfig;
-use scorpion::sequence::{HgsConfig, HgsSequencer};
-use scorpion::solver::Solver;
+use std::rc::Rc;
 
-fn quiet(seed: u64) -> HgsConfig {
-    HgsConfig {
-        seed,
-        log_iter: 0,
-        pop_init: 10,
-        max_iter: 150,
-        max_nimp: 100,
+use mcrdv::{
+    DpSchedule, HgsConfig, HgsSequence, Problem, QlawTransfer, Solver, DAY,
+};
+
+pub type DefaultSequence = HgsSequence<DpSchedule<QlawTransfer>>;
+pub type DefaultSolver = Solver<DefaultSequence>;
+
+/// Build a solver with the default layer stack and default settings.
+pub fn default_solver() -> DefaultSolver {
+    Solver::new(
+        HgsSequence::new(
+            DpSchedule::new(QlawTransfer::new())
+        )
+    )
+}
+
+
+/// The default wiring, on a search budget sized for a test suite.
+fn quick() -> Solver<HgsSequence<DpSchedule<QlawTransfer>>> {
+    let config = HgsConfig {
+        seed: 0,
+        verbose: false,
+        max_iter: 20,
+        pop_init: 4,
         ..HgsConfig::default()
+    };
+    Solver::new(HgsSequence::with_config(
+        DpSchedule::new(QlawTransfer::new()),
+        config,
+    ))
+    .verbose(false)
+}
+
+#[test]
+fn a_solved_mission_collects_the_whole_catalogue() {
+    let problem = common::problem();
+    let mission = quick().solve(&problem);
+    assert_eq!(
+        common::collected(&mission),
+        (1..problem.states.len()).collect::<Vec<_>>()
+    );
+    assert_eq!(mission.plans.len(), problem.num_chasers);
+}
+
+#[test]
+fn a_comfortable_instance_is_solved_feasibly() {
+    let problem = common::problem();
+    let mission = quick().solve(&problem);
+    assert!(problem.is_feasible(&mission), "cost {}", mission.cost());
+}
+
+#[test]
+fn the_duration_limit_holds_on_every_feasible_plan() {
+    let problem = common::problem();
+    let mission = quick().solve(&problem);
+    for plan in &mission.plans {
+        if problem.is_plan_feasible(plan) {
+            assert!(plan.time() <= problem.max_time + Problem::TIME_TOLERANCE);
+        }
     }
 }
 
-fn solve(objective: &str) -> (MissionPlan, Problem) {
-    let problem = make_problem(
-        &debris(),
-        3,
-        Some(2500.0 * DAY),
-        Some(6),
-        None,
-        objective,
-    )
-    .expect("problem must be constructible");
-    let mission = {
-        let transfer = transfer_with(&problem, 3e-3);
-        let schedule = cd(&problem, &transfer, CdConfig::default());
-        let sequence = HgsSequencer::new(&problem, &transfer, &schedule, quiet(0));
-        Solver::new(&transfer, &schedule, &sequence, false).solve()
-    };
-    (mission, problem)
+#[test]
+fn solving_twice_gives_the_same_mission() {
+    let problem = common::problem();
+    let mut solver = quick();
+    assert_eq!(solver.solve(&problem), solver.solve(&problem));
 }
 
 #[test]
-fn mission_collected_excludes_depot() {
-    let (mission, problem) = solve("sum");
-    assert!(
-        !mission.collected().contains(&0),
-        "depot wrongly counted as collected debris"
-    );
+fn a_reused_solver_carries_no_state_between_instances() {
+    let mut solver = quick();
+    let first = common::problem();
+    let mission = solver.solve(&first);
     assert_eq!(
-        mission.collected(),
-        problem.debris(),
-        "not every debris collected exactly once"
+        common::collected(&mission),
+        (1..first.states.len()).collect::<Vec<_>>()
+    );
+
+    let other = mcrdv::read_debris("data/iridium33.csv");
+    let mut states = vec![mcrdv::centroid(&other)];
+    states.extend(other);
+    let second = Rc::new(Problem::new(states, 12, 2500.0 * DAY, 12));
+
+    let mission = solver.solve(&second);
+    assert_eq!(
+        common::collected(&mission),
+        (1..second.states.len()).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn objective_sum_and_max() {
-    let (total, _) = solve("sum");
-    let (worst, _) = solve("max");
-
-    let sum: f64 = total.chaser_plans.iter().map(|p| p.cost).sum();
-    assert_approx(total.cost, sum, 1e-9, "sum objective is not the sum of chaser costs");
-
-    let mx = worst
-        .chaser_plans
-        .iter()
-        .map(|p| p.cost)
-        .fold(f64::NEG_INFINITY, f64::max);
-    assert_approx(worst.cost, mx, 1e-9, "max objective is not the max chaser cost");
+fn the_verbosity_switch_is_carried_on_the_solver() {
+    let solver = quick();
+    assert!(!solver.verbose);
+    assert!(Solver::new(HgsSequence::new(DpSchedule::new(QlawTransfer::new()))).verbose);
 }
 
 #[test]
-fn objective_aggregations_are_correct() {
-    let costs = [1.0, 2.0, 3.0];
-    assert_eq!(ObjectiveSum.aggregate(&costs), 6.0);
-    assert_eq!(ObjectiveMax.aggregate(&costs), 3.0);
-    assert_eq!(ObjectiveSum.aggregate(&[]), 0.0);
-    assert_eq!(ObjectiveMax.aggregate(&[]), 0.0, "an empty max must not be -inf");
+fn the_layers_are_reachable_through_the_stack() {
+    let solver = quick();
+    // Ownership nesting means the three can never be wired to different
+    // instances, so there is nothing to validate at run time.
+    let transfer = solver.sequence.schedule().transfer();
+    assert_eq!(transfer.num_samples, 512);
 }
 
 #[test]
-fn solver_runs_the_full_stack() {
-    let (mission, problem) = solve("sum");
-    assert!(mission.cost > 0.0, "a real mission cannot be free");
-    assert!(
-        mission.chaser_plans.len() <= problem.num_chasers,
-        "solver used more routes than chasers"
+fn the_default_stack_solves_the_bundled_instance() {
+    let problem = common::problem();
+    let mut solver = default_solver().verbose(false);
+    solver.sequence.config = HgsConfig {
+        verbose: false,
+        max_iter: 20,
+        pop_init: 4,
+        ..HgsConfig::default()
+    };
+    let mission = solver.solve(&problem);
+    assert_eq!(
+        common::collected(&mission),
+        (1..problem.states.len()).collect::<Vec<_>>()
     );
 }

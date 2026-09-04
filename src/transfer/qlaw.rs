@@ -1,191 +1,182 @@
-//! Q-law transfer estimator.
+//! Transfer layer based on an analytic Q-law estimate.
 
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
-use std::f64::consts::TAU;
 
 use crate::orbit::MeeState;
 use crate::problem::Problem;
 use crate::solver::TransferLayer;
 
-pub fn linspace(start: f64, stop: f64, n: usize) -> Vec<f64> {
-    if n == 0 { return Vec::new(); }
-    if n == 1 { return vec![start]; }
-    let step = (stop - start) / (n - 1) as f64;
-    (0..n).map(|k| start + step * k as f64).collect()
-}
-
-/// Differential RAAN-rate threshold below which alignment never repeats.
-const RATE_EPS: f64 = 1e-12;
-
-#[derive(Debug, Clone, Copy)]
-pub struct QlawConfig {
-    /// Chaser thrust acceleration [m/s^2].
+/// Transfer layer built on the Q-law estimate.
+#[derive(Debug, Clone)]
+pub struct QlawTransfer {
+    /// Thrust acceleration of a chaser \[m/s^2\].
     pub thrust: f64,
-    /// Q-law scaling factor on the element-difference norm.
+    /// Dimensionless factor scaling the estimate.
     pub factor: f64,
-    /// Number of grid samples used by `evaluate_lb`.
-    pub lb_samples: usize,
-    /// Whether to use caching.
-    pub use_cache: bool,
+    /// Departure times sampled per leg when bounding or hinting.
+    pub num_samples: usize,
+    /// Most hints returned for one leg.
+    pub num_hints: usize,
+    /// Cost factor for the transfer time.
+    pub cost_factor_time: f64,
+    /// Cost factor for the transfer fuel.
+    pub cost_factor_fuel: f64,
+
+    problem: Option<Rc<Problem>>,
+    lb_cache: RefCell<Vec<Option<(f64, f64)>>>,
 }
 
-impl Default for QlawConfig {
+impl QlawTransfer {
+    /// Build a transfer layer with default options.
+    pub fn new() -> Self {
+        Self::with_options(3e-3, 1.5, 512, 10, 0.0, 1.0)
+    }
+
+    /// Build a transfer layer.
+    pub fn with_options(
+        thrust: f64, 
+        factor: f64, 
+        num_samples: usize, 
+        num_hints: usize,
+        cost_factor_time: f64,
+        cost_factor_fuel: f64,
+    ) -> Self {
+        assert!(thrust > 0.0, "thrust must be positive");
+        assert!(factor > 0.0, "factor must be positive");
+        assert!(num_samples >= 1, "num_samples must be at least 1");
+        assert!(cost_factor_time >= 0.0, "cost_factor_time must be non-negative");
+        assert!(cost_factor_fuel >= 0.0, "cost_factor_fuel must be non-negative");
+        Self {
+            thrust,
+            factor,
+            num_samples,
+            num_hints,
+            cost_factor_time,
+            cost_factor_fuel,
+            problem: None,
+            lb_cache: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The problem instance.
+    fn problem(&self) -> &Problem {
+        self.problem
+            .as_ref()
+            .expect("transfer layer used before initialize()")
+    }
+
+    /// The `k`-th of `num_samples` departure times spanning `[0, t]`.
+    #[inline]
+    fn sample_time(&self, k: usize, t: f64) -> f64 {
+        if self.num_samples <= 1 {
+            0.0
+        } else {
+            t * (k as f64) / ((self.num_samples - 1) as f64)
+        }
+    }
+
+    /// The cost profile of a leg, sampled over `[0, t]`.
+    fn profile(&self, i: usize, j: usize, t: f64) -> Vec<f64> {
+        (0..self.num_samples)
+            .map(|k| self.evaluate(i, j, self.sample_time(k, t)).1)
+            .collect()
+    }
+
+    /// The cheapest sampled cost of a leg over `[0, t]`.
+    fn sampled_min(&self, i: usize, j: usize, t: f64) -> f64 {
+        (0..self.num_samples)
+            .map(|k| self.evaluate(i, j, self.sample_time(k, t)).1)
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+impl Default for QlawTransfer {
     fn default() -> Self {
-        Self {
-            thrust: 3e-3,
-            factor: 1.5,
-            lb_samples: 64,
-            use_cache: true,
-        }
+        Self::new()
     }
 }
 
-pub struct QlawTransfer<'p> {
-    problem: &'p Problem,
-    config: QlawConfig,
-
-    /// Cache: leg `(i, j, t)` -> `(time, cost)`.
-    cache_evaluate: RefCell<HashMap<(usize, usize, u64), (f64, f64)>>,
-    /// Cache: leg `(i, j)` -> lower bound on `(time, cost)`.
-    cache_evaluate_lb: RefCell<HashMap<(usize, usize), (f64, f64)>>,
-    /// Cache: leg `(i, j)` -> departure hints.
-    cache_hints: RefCell<HashMap<(usize, usize), Rc<Vec<f64>>>>,
-}
-
-impl<'p> QlawTransfer<'p> {
-    pub fn new(problem: &'p Problem, config: QlawConfig) -> Self {
-        Self {
-            problem,
-            config,
-            cache_evaluate: RefCell::new(HashMap::new()),
-            cache_evaluate_lb: RefCell::new(HashMap::new()),
-            cache_hints: RefCell::new(HashMap::new()),
-        }
-    }
-
-    pub fn default(problem: &'p Problem) -> Self {
-        Self::new(problem, QlawConfig::default())
-    }
-
-    // Estimate of transfer cost and time.
-    fn _evaluate(&self, i: usize, j: usize, t: f64) -> (f64, f64) {        
-        let cat = &self.problem.catalog;
-        let src = MeeState::from_kep(&cat.state(i).propagate(t));
-        let dst = MeeState::from_kep(&cat.state(j).propagate(t));
-
-        let mrates = src.max_rates();
-        let sqnorm = ((src.a - dst.a) / mrates.a).powi(2)
-            + ((src.f - dst.f) / mrates.f).powi(2)
-            + ((src.g - dst.g) / mrates.g).powi(2)
-            + ((src.h - dst.h) / mrates.h).powi(2)
-            + ((src.k - dst.k) / mrates.k).powi(2);
-        
-        let dv = self.config.factor * sqnorm.sqrt();
-        let dt = dv / self.config.thrust;
-        (dt, dv)
-    }
-
-    /// Lower bound estimate of transfer cost and time over a time grid.
-    fn _evaluate_lb(&self, i: usize, j: usize) -> (f64, f64) {
-        let mut min_dt = f64::INFINITY;
-        let mut min_dv = f64::INFINITY;
-        let grid = linspace(
-            0.0,
-            self.problem.time_horizon, 
-            self.config.lb_samples.max(1)
-        );
-        for t in grid {
-            let (dt, dc) = self.evaluate(i, j, t);
-            min_dt = min_dt.min(dt);
-            min_dv = min_dv.min(dc);
-        }
-        (min_dt, min_dv)
-    }
-
-    /// Analytic departure hints from RAAN-alignment pattern.
-    fn _hints(&self, i: usize, j: usize) -> Vec<f64> {
-        let si = &self.problem.catalog.state(i);
-        let sj = &self.problem.catalog.state(j);
-        
-        let d_rate = si.j2_secular_rates().0 - sj.j2_secular_rates().0;
-        if d_rate.abs() < RATE_EPS { return Vec::new(); }
-        
-        let d_raan = si.r - sj.r;
-        let period = TAU / d_rate.abs();
-        let mut tbase = (-d_raan / d_rate).rem_euclid(period);
-        let mut hints = Vec::new();
-        while tbase <= self.problem.time_horizon {
-            hints.push(tbase);
-            tbase += period;
-        }
-        
-        hints
-    }
-
-}
-
-impl<'p> TransferLayer for QlawTransfer<'p> {
-    fn initialize(&self) -> () {
-        self.cache_evaluate.borrow_mut().clear();
-        self.cache_evaluate_lb.borrow_mut().clear();
-        self.cache_hints.borrow_mut().clear();
+impl TransferLayer for QlawTransfer {
+    fn initialize(&mut self, problem: &Rc<Problem>) {
+        let n = problem.states.len();
+        self.problem = Some(Rc::clone(problem));
+        self.lb_cache.replace(vec![None; n * n]);
     }
 
     fn evaluate(&self, i: usize, j: usize, t: f64) -> (f64, f64) {
-        if !self.config.use_cache {
-            return self._evaluate(i, j, t);
-        }
+        let states = &self.problem().states;
+        let src = MeeState::from_kep(&states[i].propagate(t));
+        let dst = MeeState::from_kep(&states[j].propagate(t));
+        let rts = src.max_rates();
 
-        let key = (i, j, t.to_bits());
+        let da = (src.a - dst.a) / rts.a;
+        let df = (src.f - dst.f) / rts.f;
+        let dg = (src.g - dst.g) / rts.g;
+        let dh = (src.h - dst.h) / rts.h;
+        let dk = (src.k - dst.k) / rts.k;
 
-        if let Some(&result) = self.cache_evaluate.borrow().get(&key) {
-            return result;
-        }
+        let dv = self.factor * (
+            da * da + 
+            df * df + 
+            dg * dg + 
+            dh * dh + 
+            dk * dk
+        ).sqrt();
+        let dt = dv / self.thrust;
+        let dc = self.cost_factor_time * dt + self.cost_factor_fuel * dv;
 
-        let result = self._evaluate(i, j, t);
-        self.cache_evaluate.borrow_mut().insert(key, result);
-
-        result
+        (dt, dc)
     }
 
-    fn evaluate_lb(&self, i: usize, j: usize) -> (f64, f64) {
-        if !self.config.use_cache {
-            return self._evaluate_lb(i, j);
+    fn evaluate_lb(&self, i: usize, j: usize, t: f64) -> (f64, f64) {
+        let problem = self.problem();
+        if t != problem.max_time {
+            let best = self.sampled_min(i, j, t);
+            return (best / self.thrust, best);
         }
 
-        let key = (i, j);
-
-        if let Some(&result) = self.cache_evaluate_lb.borrow().get(&key) {
-            return result;
+        let n = problem.states.len();
+        let slot = i * n + j;
+        if let Some(hit) = self.lb_cache.borrow()[slot] {
+            return hit;
         }
-
-        let result = self._evaluate_lb(i, j);
-        self.cache_evaluate_lb.borrow_mut().insert(key, result);
-
-        result
+        let best = self.sampled_min(i, j, t);
+        let value = (best / self.thrust, best);
+        self.lb_cache.borrow_mut()[slot] = Some(value);
+        value
     }
 
-    fn hints(&self, i: usize, j: usize) -> Rc<Vec<f64>> {
-        if !self.config.use_cache {
-            return Rc::new(self._hints(i, j));
+    fn hints(&self, i: usize, j: usize, t: f64) -> Vec<f64> {
+        let costs = self.profile(i, j, t);
+        let m = costs.len();
+
+        // Fewer samples than hints asked for: every sample is a hint. A lone
+        // sample stops here too, having no neighbour to be compared against.
+        if m <= self.num_hints || m < 2 {
+            return (0..m.min(self.num_hints)).map(|k| self.sample_time(k, t)).collect();
         }
 
-        let key = (i, j);
+        // Strict interior local minima of the sampled profile.
+        let mut keep: Vec<usize> = (1..m - 1)
+            .filter(|&k| costs[k] < costs[k - 1] && costs[k] <= costs[k + 1])
+            .collect();
 
-        if let Some(result) = self.cache_hints.borrow().get(&key) {
-            return Rc::clone(result);
+        // A profile that only decreases towards an endpoint is minimal there.
+        if costs[0] <= costs[1] {
+            keep.push(0);
         }
+        if costs[m - 1] < costs[m - 2] {
+            keep.push(m - 1);
+        }
+        keep.sort_unstable();
 
-        let result = Rc::new(self._hints(i, j));
-        self.cache_hints.borrow_mut().insert(key, Rc::clone(&result));
-
-        result
-    }
-
-    fn statistics(&self) -> HashMap<String, Box<dyn Any>> {
-        HashMap::new()
+        // Too many windows: keep the cheapest, then restore time order.
+        if keep.len() > self.num_hints {
+            keep.sort_by(|&a, &b| costs[a].total_cmp(&costs[b]));
+            keep.truncate(self.num_hints);
+            keep.sort_unstable();
+        }
+        keep.into_iter().map(|k| self.sample_time(k, t)).collect()
     }
 }

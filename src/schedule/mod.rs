@@ -1,9 +1,5 @@
-//! Schedule layer for chaser plan optimization.
+//! Schedule layer: when a chaser leaves each debris of a fixed sequence.
 
-pub mod cd;
 pub mod dp;
-pub mod nowait;
 
-pub use cd::{CdConfig, CdScheduler};
-pub use dp::{DpConfig, DpScheduler};
-pub use nowait::{NowaitConfig, NowaitScheduler};
+pub use dp::DpSchedule;

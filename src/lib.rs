@@ -1,12 +1,9 @@
-//! scorpion -- Active debris removal mission planner in Rust.
+//! `mcrdv` -- Multi-Chaser Rendezvous.
 //!
-//! - [`orbit`]: orbital state representation and utilities.
-//! - [`problem`]: problem definition with generic objective and constraints.
-//! - [`solver`]: abstract layer interfaces (transfer / schedule / sequence).
-//! - [`transfer`]: concrete transfer layer (Q-law estimator).
-//! - [`schedule`]: concrete schedule layer (dynamic-programming scheduler).
-//! - [`sequence`]: concrete sequence layer (Hybrid Genetic Search).
-//! - [`io`]: helpers to read debris catalogs and write/format mission plans.
+//! Planning software for multi-chaser rendezvous mission.
+
+#![warn(missing_docs)]
+#![allow(clippy::manual_is_multiple_of)]
 
 pub mod io;
 pub mod orbit;
@@ -15,3 +12,11 @@ pub mod schedule;
 pub mod sequence;
 pub mod solver;
 pub mod transfer;
+
+pub use io::{format_mission, read_debris, write_mission};
+pub use orbit::{centroid, circular_mean, KepState, DAY, MU, TAU};
+pub use problem::{ChaserPlan, MissionPlan, Problem, DEPOT};
+pub use schedule::DpSchedule;
+pub use sequence::{ClusterSequence, Crossover, Generation, HgsConfig, HgsSequence, Ordering};
+pub use solver::{ScheduleLayer, SequenceLayer, Solver, TransferLayer};
+pub use transfer::QlawTransfer;

@@ -1,182 +1,140 @@
-//! Component tests for the transfer layer.
+//! The Q-law transfer layer.
 
 mod common;
 
-use common::*;
-use scorpion::orbit::{Catalog, DAY};
-use scorpion::problem::{make_problem, Problem};
-use scorpion::solver::TransferLayer;
-use scorpion::transfer::qlaw::linspace;
-use scorpion::transfer::{QlawConfig, QlawTransfer};
+use mcrdv::solver::TransferLayer;
+use mcrdv::orbit::MeeState;
+use mcrdv::transfer::QlawTransfer;
+use mcrdv::KepState;
 
-const TAU: f64 = std::f64::consts::TAU;
-
-/// A `(i, j)` debris leg that has at least one RAAN-alignment hint.
-fn first_leg_with_hint(
-    transfer: &QlawTransfer,
-    problem: &Problem,
-) -> Option<(usize, usize, Vec<f64>)> {
-    for i in 1..=problem.num_debris {
-        for j in 1..=problem.num_debris {
-            if i == j {
-                continue;
-            }
-            let hints = transfer.hints(i, j);
-            if !hints.is_empty() {
-                return Some((i, j, hints.to_vec()));
-            }
-        }
-    }
-    None
+fn layer() -> (std::rc::Rc<mcrdv::Problem>, QlawTransfer) {
+    let problem = common::problem();
+    let mut transfer = QlawTransfer::new();
+    transfer.initialize(&problem);
+    (problem, transfer)
 }
 
 #[test]
-fn self_transfer_is_free() {
-    let problem = problem();
-    let transfer = transfer(&problem);
-    for i in [1usize, 4, 7] {
-        for t in [0.0, 1e6, 5e7] {
-            let (dt, dv) = transfer.evaluate(i, i, t);
-            assert_eq!(dt, 0.0, "self-transfer time not zero at t={t}");
-            assert_eq!(dv, 0.0, "self-transfer fuel not zero at t={t}");
-        }
+fn equinoctial_conversion_is_singularity_free_at_zero_eccentricity() {
+    let kep = KepState::new(7.0e6, 0.0, 0.0, 0.0, 0.0, 0.3);
+    let mee = MeeState::from_kep(&kep);
+    assert_eq!(mee.a, kep.a);
+    assert!(mee.f.abs() < 1e-15 && mee.g.abs() < 1e-15);
+    assert!(mee.h.abs() < 1e-15 && mee.k.abs() < 1e-15);
+}
+
+#[test]
+fn max_rates_are_finite_and_positive_on_a_real_orbit() {
+    let mee = MeeState::from_kep(&KepState::new(7.15e6, 1e-3, 1.507, 0.65, 6.18, 0.1));
+    let rates = mee.max_rates();
+    for r in [rates.a, rates.f, rates.g] {
+        assert!(r.is_finite() && r > 0.0, "got {r}");
     }
 }
 
 #[test]
-fn time_is_fuel_over_thrust() {
-    let problem = problem();
-    let transfer = transfer(&problem);
-    for t in linspace(0.0, problem.time_horizon, 200) {
-        let (dt, dv) = transfer.evaluate(1, 7, t);
-        assert!(dv >= 0.0, "negative fuel returned at t={t}");
-        assert_approx(dt, dv / THRUST, 1e-12, "time != fuel / thrust");
+fn time_and_cost_are_proportional_through_the_thrust() {
+    let (problem, transfer) = layer();
+    for t in [0.0, problem.max_time / 3.0, problem.max_time] {
+        let (dt, dc) = transfer.evaluate(1, 5, t);
+        assert!((dt - dc / transfer.thrust).abs() <= 1e-9 * dt.max(1.0));
     }
 }
 
 #[test]
-fn thrust_and_factor_scaling() {
-    // dv is thrust-independent; dt scales as 1/thrust. dv scales with factor.
-    let problem = problem();
-    let mk = |thrust: f64, factor: f64| {
-        QlawTransfer::new(
-            &problem,
-            QlawConfig { thrust, factor, ..QlawConfig::default() },
-        )
-    };
-    let a = mk(3e-4, 1.5);
-    let b = mk(6e-4, 1.5);
-    let c = mk(3e-4, 3.0);
-    for t in linspace(0.0, problem.time_horizon, 50) {
-        let (dta, dva) = a.evaluate(1, 7, t);
-        let (dtb, dvb) = b.evaluate(1, 7, t);
-        let (_dtc, dvc) = c.evaluate(1, 7, t);
-        assert_approx(dva, dvb, 1e-12, "fuel should not depend on thrust");
-        assert_approx(dtb, dta * (3e-4 / 6e-4), 1e-12, "time should scale as 1/thrust");
-        assert_approx(dvc, dva * (3.0 / 1.5), 1e-12, "fuel should scale with factor");
-    }
+fn a_transfer_to_the_same_orbit_is_free() {
+    let (_, transfer) = layer();
+    let (dt, dc) = transfer.evaluate(4, 4, 1234.0);
+    assert_eq!(dc, 0.0);
+    assert_eq!(dt, 0.0);
 }
 
 #[test]
-fn cost_increases_with_raan_separation() {
-    // Orbits identical but for their RAAN; cost must grow with the separation.
-    let seps = [0.0, 0.3, 0.8, 1.5, 2.5];
-    let n = seps.len();
-    let catalog = Catalog::new(
-        vec![7.0e6; n],
-        vec![0.001; n],
-        vec![1.0; n],
-        seps.to_vec(),
-        vec![0.3; n],
-        vec![0.2; n],
-    );
-    let problem = make_problem(&catalog, 1, Some(3000.0 * DAY), None, None, "sum")
-        .expect("problem must be constructible");
-    let transfer = QlawTransfer::default(&problem);
-
-    // State 1 has RAAN 0.0; states 2..5 have growing RAAN separation from it.
-    let costs: Vec<f64> = (2..=5).map(|j| transfer.evaluate(1, j, 0.0).1).collect();
-    assert!(
-        costs.windows(2).all(|w| w[0] <= w[1]),
-        "cost not monotonic in RAAN separation: {costs:?}"
-    );
-    assert!(costs[0] > 0.0, "a nonzero plane change should cost something");
+fn the_cost_depends_on_the_departure_time() {
+    // If it did not, the whole scheduling layer would be pointless.
+    let (problem, transfer) = layer();
+    let early = transfer.evaluate(1, 7, 0.0).1;
+    let late = transfer.evaluate(1, 7, problem.max_time).1;
+    assert!((early - late).abs() > 1e-6, "{early} vs {late}");
 }
 
 #[test]
-fn departure_hints_are_aligned_and_cheap() {
-    let problem = problem();
-    let transfer = transfer(&problem);
-    let (i, j, hints) =
-        first_leg_with_hint(&transfer, &problem).expect("no RAAN-alignment hints on any leg");
-    let horizon = problem.time_horizon;
-    assert!(
-        hints.iter().all(|&h| (0.0..=horizon).contains(&h)),
-        "hint outside [0, horizon]: {hints:?}"
-    );
-
-    // At a hint, the two nodes' (drifting) RAANs are aligned modulo 2*pi.
-    let t = hints[0];
-    let si = problem.catalog.state(i).propagate(t);
-    let sj = problem.catalog.state(j).propagate(t);
-    let d = (si.r - sj.r).abs().rem_euclid(TAU);
-    let misalign = d.min(TAU - d);
-    assert!(misalign < 1e-3, "hint is not RAAN-aligned (misalignment {misalign})");
-
-    // And the hint is cheaper than the maximally misaligned epoch half a
-    // drift period later.
-    let rate = (problem.catalog.state(i).j2_secular_rates().0
-        - problem.catalog.state(j).j2_secular_rates().0)
-        .abs();
-    if rate > 0.0 {
-        let anti = t + 0.5 * TAU / rate;
-        if anti <= horizon {
-            let cost_hint = transfer.evaluate(i, j, t).1;
-            let cost_anti = transfer.evaluate(i, j, anti).1;
+fn the_bound_never_exceeds_a_sampled_cost() {
+    let (problem, transfer) = layer();
+    let horizon = problem.max_time;
+    for (i, j) in [(0usize, 3usize), (2, 9), (5, 1), (11, 4)] {
+        let (_, lb) = transfer.evaluate_lb(i, j, horizon);
+        for k in 0..transfer.num_samples {
+            let t = horizon * (k as f64) / ((transfer.num_samples - 1) as f64);
             assert!(
-                cost_hint <= cost_anti + 1e-9,
-                "aligned hint not cheaper than anti-aligned epoch: {cost_hint} vs {cost_anti}"
+                lb <= transfer.evaluate(i, j, t).1 + 1e-9,
+                "bound {lb} exceeded the cost at sample {k}"
             );
         }
     }
 }
 
 #[test]
-fn evaluate_lb_is_a_lower_bound() {
-    let problem = problem();
-    let transfer = transfer(&problem);
-    let (lb_t, lb_v) = transfer.evaluate_lb(1, 7);
-    let mut min_t = f64::INFINITY;
-    let mut min_v = f64::INFINITY;
-    for t in linspace(0.0, problem.time_horizon, 60) {
-        let (dt, dv) = transfer.evaluate(1, 7, t);
-        min_t = min_t.min(dt);
-        min_v = min_v.min(dv);
-    }
-    assert!(lb_v <= min_v + 1e-6, "fuel lower bound exceeds a sampled cost");
-    assert!(lb_t <= min_t + 1e-6, "time lower bound exceeds a sampled time");
+fn the_bound_is_stable_across_calls() {
+    // The second call is served from the dense table; it must agree exactly.
+    let (problem, transfer) = layer();
+    let first = transfer.evaluate_lb(2, 8, problem.max_time);
+    let second = transfer.evaluate_lb(2, 8, problem.max_time);
+    assert_eq!(first, second);
 }
 
 #[test]
-fn caching_does_not_change_results() {
-    let problem = problem();
-    let cached = QlawTransfer::new(
-        &problem,
-        QlawConfig { thrust: THRUST, use_cache: true, ..QlawConfig::default() },
-    );
-    let direct = QlawTransfer::new(
-        &problem,
-        QlawConfig { thrust: THRUST, use_cache: false, ..QlawConfig::default() },
-    );
-    for t in linspace(0.0, problem.time_horizon, 32) {
-        let (dta, dva) = cached.evaluate(1, 7, t);
-        let (dtb, dvb) = direct.evaluate(1, 7, t);
-        assert_eq!((dta, dva), (dtb, dvb), "caching changed evaluate at t={t}");
+fn a_shorter_window_can_only_raise_the_bound() {
+    let (problem, transfer) = layer();
+    let wide = transfer.evaluate_lb(3, 6, problem.max_time).1;
+    let narrow = transfer.evaluate_lb(3, 6, problem.max_time / 4.0).1;
+    assert!(narrow >= wide - 1e-9, "{narrow} < {wide}");
+}
+
+#[test]
+fn hints_are_sorted_inside_the_window_and_capped() {
+    let (problem, transfer) = layer();
+    let horizon = problem.max_time;
+    for (i, j) in [(0usize, 1usize), (4, 9), (7, 2)] {
+        let hints = transfer.hints(i, j, horizon);
+        assert!(!hints.is_empty(), "a leg should advertise some window");
+        assert!(hints.len() <= transfer.num_hints, "{} hints", hints.len());
+        assert!(hints.windows(2).all(|w| w[0] < w[1]), "hints must increase");
+        assert!(hints.iter().all(|&t| (0.0..=horizon).contains(&t)));
     }
-    assert_eq!(
-        cached.evaluate_lb(1, 7),
-        direct.evaluate_lb(1, 7),
-        "caching changed evaluate_lb"
-    );
-    assert_eq!(*cached.hints(1, 7), *direct.hints(1, 7), "caching changed hints");
+}
+
+#[test]
+fn a_lone_sample_with_no_hint_budget_yields_no_hint() {
+    // A single sample has no neighbour to be compared against, so the local
+    // minimum test has nothing to read; asking for no hint must still answer.
+    let problem = common::problem();
+    let mut transfer = QlawTransfer::with_options(3e-3, 1.5, 1, 0, 0.0, 1.0);
+    transfer.initialize(&problem);
+    assert!(transfer.hints(1, 2, problem.max_time).is_empty());
+}
+
+#[test]
+fn hints_land_on_locally_cheap_departure_times() {
+    // A hint should not be more expensive than both of its sampled neighbours.
+    let (problem, transfer) = layer();
+    let horizon = problem.max_time;
+    let step = horizon / ((transfer.num_samples - 1) as f64);
+    for &t in transfer.hints(1, 6, horizon).iter() {
+        if t <= 0.0 || t >= horizon {
+            continue;
+        }
+        let here = transfer.evaluate(1, 6, t).1;
+        let before = transfer.evaluate(1, 6, t - step).1;
+        let after = transfer.evaluate(1, 6, t + step).1;
+        assert!(here <= before && here <= after, "{before} {here} {after}");
+    }
+}
+
+#[test]
+fn fewer_samples_than_hints_returns_every_sample() {
+    let problem = common::problem();
+    let mut transfer = QlawTransfer::with_options(3e-3, 1.5, 4, 10, 0.0, 1.0);
+    transfer.initialize(&problem);
+    assert_eq!(transfer.hints(1, 2, problem.max_time).len(), 4);
 }

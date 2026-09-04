@@ -1,156 +1,151 @@
-//! Input-output helpers to read debris catalogs and write mission plans.
+//! IO utilities for orbital states and mission plans.
 
-use std::error::Error;
+use std::fmt::Write as _;
+use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::orbit::Catalog;
+use crate::orbit::KepState;
 use crate::problem::{MissionPlan, Problem};
 
-/// Expected header of a debris catalog csv file.
-const HEADER: [&str; 6] = ["a[m]", "e[prop]", "i[rad]", "r[rad]", "o[rad]", "t[rad]"];
+/// Header format of CSV state file.
+pub const CSV_HEADER: &str = "a[m],e[prop],i[rad],r[rad],o[rad],t[rad]";
 
-/// Read a debris catalog from a csv file (depot not included).
-pub fn read_debris(path: impl AsRef<Path>) -> Result<Catalog, Box<dyn Error>> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_path(path.as_ref())?;
+/// Read a CSV state file, each row given one state in Keplerian elements.
+pub fn read_debris<P: AsRef<Path>>(path: P) -> Vec<KepState> {
+    let path = path.as_ref();
+    let show = path.display();
+    let file = fs::File::open(path)
+        .unwrap_or_else(|e| panic!("cannot open '{show}': {e}"));
+    
+    let mut lines = BufReader::new(file).lines().enumerate();
 
-    let header: Vec<String> = reader.headers()?.iter().map(str::to_string).collect();
-    if header.as_slice() != HEADER {
-        return Err(format!("Invalid header, expected: {HEADER:?}.").into());
+    let header = match lines.next() {
+        Some((_, header)) => header
+            .unwrap_or_else(|e| panic!("cannot read '{show}': {e}")),
+        None => String::new(),
+    };
+    if header.trim() != CSV_HEADER {
+        panic!("invalid csv header, expected: {CSV_HEADER}");
     }
 
-    let (mut a, mut e, mut i, mut r, mut o, mut t) = (
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-    );
-    for record in reader.records() {
-        let record = record?;
-        if record.iter().all(|c| c.trim().is_empty()) {
-            continue;
+    let mut debris = Vec::new();
+    for (index, line) in lines {
+        let line = line.unwrap_or_else(|e| panic!("cannot read '{show}': {e}"));
+        if line.trim().is_empty() { continue; }
+        let number = index + 1;
+        let mut values = Vec::with_capacity(6);
+        for field in line.split(',').take(6) {
+            let field = field.trim();
+            match field.parse::<f64>() {
+                Ok(value) => values.push(value),
+                Err(_) => panic!(
+                    "{show}, line {number}: cannot parse '{field}' as a number"
+                ),
+            }
         }
-        let v: Vec<f64> = record
-            .iter()
-            .take(6)
-            .map(|c| c.trim().parse::<f64>())
-            .collect::<Result<_, _>>()?;
-        if v.len() < 6 {
-            return Err("row has fewer than 6 columns".into());
+        if values.len() < 6 {
+            panic!(
+                "{show}, line {number}: expected 6 columns, found {}", 
+                values.len()
+            );
         }
-        a.push(v[0]);
-        e.push(v[1]);
-        i.push(v[2]);
-        r.push(v[3]);
-        o.push(v[4]);
-        t.push(v[5]);
+        debris.push(
+            KepState::new(
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                values[4],
+                values[5],
+            )
+        );
     }
-    Ok(Catalog::new(a, e, i, r, o, t))
+    debris
 }
 
-/// Write a mission plan to a csv file.
-pub fn write_mission(
-    mission: &MissionPlan,
-    path: impl AsRef<Path>,
-) -> Result<(), Box<dyn Error>> {
-    let mut writer = csv::Writer::from_path(path.as_ref())?;
-    writer.write_record(["chaser", "node", "meet", "wait", "cost"])?;
-    for (p, plan) in mission.chaser_plans.iter().enumerate() {
-        for k in 0..plan.nodes_indices.len() {
-            writer.write_record([
-                p.to_string(),
-                plan.nodes_indices[k].to_string(),
-                format!("{:.*}", 2, plan.meeting_times[k]),
-                format!("{:.*}", 2, plan.waiting_times[k]),
-                format!("{:.*}", 2, plan.per_leg_costs[k]),
-            ])?;
+/// Write a mission plan as one row per visited object.
+pub fn write_mission<P: AsRef<Path>>(mission: &MissionPlan, path: P, precision: usize) {
+    let mut text = String::from("chaser,node,depart,arrive,cost\n");
+    for (k, plan) in mission.plans.iter().enumerate() {
+        for i in 0..plan.len() {
+            let _ = writeln!(
+                text,
+                "{},{},{:.*},{:.*},{:.*}",
+                k,
+                plan.sequence[i],
+                precision,
+                plan.depart[i],
+                precision,
+                plan.arrive[i],
+                precision,
+                plan.costs[i]
+            );
         }
     }
-    writer.flush()?;
-    Ok(())
+    let path = path.as_ref();
+    fs::write(path, text)
+        .unwrap_or_else(|e| panic!("cannot write '{}': {e}", path.display()));
 }
 
-/// Return a human-readable report of a mission plan.
-pub fn format_mission(mission: &MissionPlan, problem: &Problem) -> String {
-    let width: usize = 70;
+/// Render a mission plan as a human-readable string.
+pub fn format_mission(problem: &Problem, mission: &MissionPlan) -> String {
+    const WIDTH: usize = 58;
+    let side = "=".repeat(WIDTH / 2 - 7);
+    let used = mission.plans.iter().filter(|p| p.load() > 0).count();
 
-    let banner = |title: &str| -> String {
-        let pad = width.saturating_sub(title.len() + 2);
-        let left = pad / 2;
-        let right = pad - left;
-        format!("{} {} {}", "=".repeat(left), title, "=".repeat(right))
-    };
-    let tag = |node: usize| -> String {
-        if node == 0 {
-            "C".to_string()
-        } else {
-            format!("D{}", node - 1)
-        }
-    };
+    let mut lines = Vec::new();
+    lines.push(format!("{side} Mission plan {side}"));
+    lines.push(format!("Feasible     : {}", problem.is_feasible(mission)));
+    lines.push(format!("Total cost   : {:.1}", mission.cost()));
+    lines.push(format!("Chasers used : {}/{}", used, problem.num_chasers));
 
-    let used: Vec<&crate::problem::ChaserPlan> =
-        mission.chaser_plans.iter().filter(|p| p.load() > 0).collect();
-
-    let mut lines: Vec<String> = vec![banner("Mission plan")];
-    lines.push(format!(
-        "{:<16} : {:>10}",
-        "Mission feasible",
-        if mission.feasible { "true" } else { "false" }
-    ));
-    lines.push(format!("{:<16} : {:>10.1}", "Mission cost", mission.cost));
-    lines.push(format!("{:<16} : {:>10}", "Mission chasers", used.len()));
-
-    if !problem.constraints.is_empty() && !used.is_empty() {
-        lines.push(format!(
-            "{:<16} :  {:>10} | {:>10} | {:>10}",
-            "Constraints", "min", "avg", "max"
-        ));
-        for c in &problem.constraints {
-            let vals: Vec<f64> = used.iter().map(|p| c.metric(p)).collect();
-            let mn = vals.iter().copied().fold(f64::INFINITY, f64::min);
-            let mx = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let av = vals.iter().sum::<f64>() / vals.len() as f64;
-            let head = format!("{} [{:>3}]", c.name(), c.unit());
-            let cell = format!(" {mn:>10.1} | {av:>10.1} | {mx:>10.1} ");
-            lines.push(format!("{head:>16} : {cell}"));
-        }
-    }
-
-    for (k, plan) in used.iter().enumerate() {
-        let feas = problem.is_feasible(plan);
+    for (p, plan) in mission.plans.iter().enumerate() {
         lines.push(String::new());
         lines.push(format!(
-            "Route {k} (feasible: {}, cost: {:.1})",
-            if feas { "true" } else { "false" },
-            plan.cost
+            "Chaser {} (feasible: {}, cost: {:.1})",
+            p,
+            problem.is_plan_feasible(plan),
+            plan.cost()
         ));
         lines.push(format!(
             "  {:<7}{:<9}{:>13}{:>13}{:>14}",
-            "src", "dst", "depart", "arrive", "cum. cost"
+            "src", "dst", "arrive", "depart", "leg cost"
         ));
-        let depart = plan.departure_times();
-        let mut cum = 0.0;
-        for i in 1..plan.nodes_indices.len() {
-            cum += plan.per_leg_costs[i];
+
+        let last = plan.len() - 1;
+        for i in 0..plan.len() {
+            let (src, dst, arrive, depart, cost) = if i == last {
+                (
+                    plan.sequence[i].to_string(),
+                    "--".to_string(), 
+                    format!("{:.1}", plan.arrive[i]), 
+                    "--".to_string(),
+                    plan.costs[i],
+                )
+            } else if i == 0 {
+                (
+                    plan.sequence[i].to_string(),
+                    plan.sequence[1].to_string(), 
+                    "--".to_string(),
+                    format!("{:.1}", plan.depart[0]),
+                    plan.costs[i],
+                )
+            } else {
+                (
+                    plan.sequence[i].to_string(),
+                    plan.sequence[i + 1].to_string(),
+                    format!("{:.1}", plan.arrive[i]),
+                    format!("{:.1}", plan.depart[i]),
+                    plan.costs[i],
+                )
+            };
             lines.push(format!(
-                "  {:<7}{:<9}{:>13.1}{:>13.1}{:>14.2}",
-                tag(plan.nodes_indices[i - 1]),
-                tag(plan.nodes_indices[i]),
-                depart[i - 1],
-                plan.meeting_times[i],
-                cum
+                "  {:<7}{:<9}{:>13}{:>13}{:>14.2}",
+                src, dst, arrive, depart, cost
             ));
         }
     }
-    lines.push("=".repeat(width));
+    lines.push("=".repeat(WIDTH));
     lines.join("\n")
-}
-
-/// Print a human-readable report of a mission plan to stdout.
-pub fn print_mission(mission: &MissionPlan, problem: &Problem) {
-    println!("{}", format_mission(mission, problem));
 }

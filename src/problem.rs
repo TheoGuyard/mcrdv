@@ -1,286 +1,111 @@
-//! Active debris removal mission planning problem definition.
+//! The problem instance and the objects a solution is made of.
 
-use std::any::Any;
-use std::error::Error;
+use std::fmt;
 
-use crate::orbit::Catalog;
+use crate::orbit::{KepState, DAY};
+
+/// Index of the swarm in a problem state list.
+pub const DEPOT: usize = 0;
 
 // ========================================================================= //
-// Mission representation
+// Solution representation
 // ========================================================================= //
 
-/// Mission plan for a single chaser.
+/// The mission plan of a single chaser.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChaserPlan {
-    /// Visited node indices, starting at the depot `0`.
-    pub nodes_indices: Vec<usize>,
-    /// Meeting epoch at each node [s].
-    pub meeting_times: Vec<f64>,
-    /// Waiting time held at each node before departure [s].
-    pub waiting_times: Vec<f64>,
-    /// Cost incurred on the leg arriving at each node.
-    pub per_leg_costs: Vec<f64>,
-    /// Total plan cost.
-    pub cost: f64,
-    /// Whether the plan satisfies all constraints.
-    pub feasible: bool,
+    /// State indices visited, starting at [`DEPOT`].
+    pub sequence: Vec<usize>,
+    /// Departure time from each visited state \[s\].
+    pub depart: Vec<f64>,
+    /// Arrival time at each visited state \[s\].
+    pub arrive: Vec<f64>,
+    /// Cost of the leg arriving at each visited state.
+    pub costs: Vec<f64>,
 }
 
 impl ChaserPlan {
-    /// Build a chaser plan from its fields.
+    /// Build a chaser plan.
     pub fn new(
-        nodes_indices: Vec<usize>,
-        meeting_times: Vec<f64>,
-        waiting_times: Vec<f64>,
-        per_leg_costs: Vec<f64>,
-        cost: f64,
-        feasible: bool,
+        sequence: Vec<usize>,
+        depart: Vec<f64>,
+        arrive: Vec<f64>,
+        costs: Vec<f64>,
     ) -> Self {
+        assert!(
+            sequence.len() == depart.len()
+                && sequence.len() == arrive.len()
+                && sequence.len() == costs.len(),
+            "chaser plan attributes must have equal length"
+        );
         Self {
-            nodes_indices,
-            meeting_times,
-            waiting_times,
-            per_leg_costs,
-            cost,
-            feasible,
+            sequence,
+            depart,
+            arrive,
+            costs,
         }
     }
 
-    /// Number of collected debris (every visited node but the depot start).
-    pub fn load(&self) -> usize {
-        self.nodes_indices.len() - 1
-    }
-
-    /// Wall-clock mission time, i.e. the final meeting epoch [s].
-    pub fn mission_time(&self) -> f64 {
-        self.meeting_times.last().copied().unwrap_or(0.0)
-    }
-
-    /// Departure epoch from each node (`meeting + waiting`) [s].
-    pub fn departure_times(&self) -> Vec<f64> {
-        self.meeting_times
-            .iter()
-            .zip(&self.waiting_times)
-            .map(|(m, w)| m + w)
-            .collect()
-    }
-
-    /// The trivial plan that stays at the depot.
+    /// Empty chaser plan visiting no debris.
     pub fn empty() -> Self {
         Self {
-            nodes_indices: vec![0],
-            meeting_times: vec![0.0],
-            waiting_times: vec![0.0],
-            per_leg_costs: vec![0.0],
-            cost: 0.0,
-            feasible: true,
+            sequence: vec![DEPOT],
+            depart: vec![0.0],
+            arrive: vec![0.0],
+            costs: vec![0.0],
         }
+    }
+
+    /// Number of states visited, including the depot one.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sequence.len()
+    }
+
+    /// Number of debris collected.
+    #[inline]
+    pub fn load(&self) -> usize {
+        self.sequence.len() - 1
+    }
+
+    /// Total cost of the plan.
+    #[inline]
+    pub fn cost(&self) -> f64 {
+        self.costs.iter().sum()
+    }
+
+    /// Time at which the chaser reaches its last debris \[s\].
+    #[inline]
+    pub fn time(&self) -> f64 {
+        self.arrive.last().copied().unwrap_or(0.0)
+    }
+
+    /// Whether the plan collects no debris.
+    ///
+    /// A plan always holds the object it starts from, so this asks about the
+    /// load rather than about the length of the sequence.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.load() == 0
     }
 }
 
-/// Mission plan for a swarm of chasers.
+/// Mission plan containing all individual chaser plans.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MissionPlan {
-    /// Per-chaser plans.
-    pub chaser_plans: Vec<ChaserPlan>,
-    /// Mission cost.
-    pub cost: f64,
-    /// Mission feasibility.
-    pub feasible: bool,
+    /// The individual chaser plans (idle plans included).
+    pub plans: Vec<ChaserPlan>,
 }
 
 impl MissionPlan {
-    /// Build a mission plan from its fields.
-    pub fn new(chaser_plans: Vec<ChaserPlan>, cost: f64, feasible: bool) -> Self {
-        Self {
-            chaser_plans,
-            cost,
-            feasible,
-        }
+    /// Build a mission plan.
+    pub fn new(plans: Vec<ChaserPlan>) -> Self {
+        Self { plans }
     }
 
-    /// Sorted, de-duplicated collected debris nodes (the depot `0` excluded).
-    pub fn collected(&self) -> Vec<usize> {
-        let mut nodes: Vec<usize> = self
-            .chaser_plans
-            .iter()
-            .flat_map(|p| p.nodes_indices.iter().copied())
-            .filter(|&node| node != 0)
-            .collect();
-        nodes.sort_unstable();
-        nodes.dedup();
-        nodes
-    }
-}
-
-// ========================================================================= //
-// Constraints
-// ========================================================================= //
-
-/// Default tolerance used when checking constraint satisfaction.
-pub const DEFAULT_TOL: f64 = 1e-9;
-
-/// Interface for an operational constraint on a chaser plan.
-pub trait Constraint {
-    /// Short constraint name.
-    fn name(&self) -> &'static str {
-        "cst"
-    }
-
-    /// Unit of the monitored metric.
-    fn unit(&self) -> &'static str {
-        "---"
-    }
-
-    /// The amount by which the plan violates the constraint (>0 if violated).
-    fn violation(&self, plan: &ChaserPlan) -> f64;
-
-    /// The monitored plan quantity that this constraint bounds.
-    fn metric(&self, plan: &ChaserPlan) -> f64;
-
-    /// Whether the plan satisfies the constraint within tolerance `tol`.
-    fn satisfied(&self, plan: &ChaserPlan, tol: f64) -> bool {
-        self.violation(plan) <= tol
-    }
-
-    /// Downcast hook for the few places that need a concrete constraint type
-    /// (the `MaxTime` time-horizon deduction and the `MaxCost` cost cap). This
-    /// keeps the trait free of bound-specific methods.
-    fn as_any(&self) -> &dyn Any;
-}
-
-/// Constraint on the maximum chaser load.
-#[derive(Debug, Clone, Copy)]
-pub struct MaxLoad {
-    pub qmax: usize,
-}
-
-impl MaxLoad {
-    pub fn new(qmax: usize) -> Self {
-        Self { qmax }
-    }
-}
-
-impl Constraint for MaxLoad {
-    fn name(&self) -> &'static str {
-        "load"
-    }
-    fn unit(&self) -> &'static str {
-        "num"
-    }
-    fn metric(&self, plan: &ChaserPlan) -> f64 {
-        plan.load() as f64
-    }
-    fn violation(&self, plan: &ChaserPlan) -> f64 {
-        plan.load() as f64 - self.qmax as f64
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// Constraint on the maximum chaser mission time.
-#[derive(Debug, Clone, Copy)]
-pub struct MaxTime {
-    pub tmax: f64,
-}
-
-impl MaxTime {
-    pub fn new(tmax: f64) -> Self {
-        Self { tmax }
-    }
-}
-
-impl Constraint for MaxTime {
-    fn name(&self) -> &'static str {
-        "time"
-    }
-    fn unit(&self) -> &'static str {
-        "sec"
-    }
-    fn metric(&self, plan: &ChaserPlan) -> f64 {
-        plan.mission_time()
-    }
-    fn violation(&self, plan: &ChaserPlan) -> f64 {
-        plan.mission_time() - self.tmax
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// Constraint on the maximum chaser cost.
-#[derive(Debug, Clone, Copy)]
-pub struct MaxCost {
-    pub cmax: f64,
-}
-
-impl MaxCost {
-    pub fn new(cmax: f64) -> Self {
-        Self { cmax }
-    }
-}
-
-impl Constraint for MaxCost {
-    fn name(&self) -> &'static str {
-        "cost"
-    }
-    fn unit(&self) -> &'static str {
-        "val"
-    }
-    fn metric(&self, plan: &ChaserPlan) -> f64 {
-        plan.cost
-    }
-    fn violation(&self, plan: &ChaserPlan) -> f64 {
-        plan.cost - self.cmax
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-// ========================================================================= //
-// Objective
-// ========================================================================= //
-
-/// Interface for aggregating per-chaser costs into the mission cost.
-pub trait Objective {
-    /// Human-readable objective name.
-    fn name(&self) -> &'static str {
-        "obj"
-    }
-
-    /// Combine the per-chaser plan costs into a single objective value.
-    fn aggregate(&self, costs: &[f64]) -> f64;
-}
-
-/// Mission cost expressed as the sum of chaser costs.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ObjectiveSum;
-
-impl Objective for ObjectiveSum {
-    fn name(&self) -> &'static str {
-        "sum chaser cost"
-    }
-    fn aggregate(&self, costs: &[f64]) -> f64 {
-        costs.iter().sum()
-    }
-}
-
-/// Mission cost expressed as the maximum of chaser costs.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ObjectiveMax;
-
-impl Objective for ObjectiveMax {
-    fn name(&self) -> &'static str {
-        "max chaser cost"
-    }
-    fn aggregate(&self, costs: &[f64]) -> f64 {
-        if costs.is_empty() {
-            0.0
-        } else {
-            costs.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-        }
+    /// Total cost of the mission.
+    pub fn cost(&self) -> f64 {
+        self.plans.iter().map(ChaserPlan::cost).sum()
     }
 }
 
@@ -288,139 +113,78 @@ impl Objective for ObjectiveMax {
 // Problem
 // ========================================================================= //
 
-/// Multi-chaser active debris removal problem instance.
+/// Problem instance, with depot as first element of the states by convention.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Problem {
-    /// Orbital states catalog (depot at index `0`).
-    pub catalog: Catalog,
-    /// Number of available chasers.
+    /// Problem states `[depot, debris_1, ..., debris_n]`.
+    pub states: Vec<KepState>,
+    /// Number of chasers available in the depot.
     pub num_chasers: usize,
-    /// Number of debris to collect.
-    pub num_debris: usize,
-    /// Mission time horizon [s].
-    pub time_horizon: f64,
-    /// Operational constraints applied to every chaser plan.
-    pub constraints: Vec<Box<dyn Constraint>>,
-    /// Mission cost aggregating per-chaser costs.
-    pub objective: Box<dyn Objective>,
+    /// Maximum mission time per chaser \[s\].
+    pub max_time: f64,
+    /// Maximum mission load per chaser \[num of debris\].
+    pub max_load: usize,
 }
 
 impl Problem {
+    /// Tolerance when judging time feasibility \[s\].
+    pub const TIME_TOLERANCE: f64 = 1.0;
+
     /// Build a problem instance.
-    ///
-    /// The time horizon is taken from the `time_horizon` argument and/or from a
-    /// `MaxTime` constraint (the minimum of the two when both are present). An
-    /// error is returned if neither defines it.
     pub fn new(
-        catalog: Catalog,
+        states: Vec<KepState>,
         num_chasers: usize,
-        time_horizon: Option<f64>,
-        constraints: Vec<Box<dyn Constraint>>,
-        objective: Option<Box<dyn Objective>>,
-    ) -> Result<Self, Box<dyn Error>> {
-        let num_debris = catalog.num_debris();
-        let objective: Box<dyn Objective> = objective.unwrap_or_else(|| Box::new(ObjectiveSum));
+        max_time: f64,
+        max_load: usize,
+    ) -> Self {
+        if states.len() <= 1 { panic!("'states' must be of length >= 2"); }
+        if num_chasers == 0 { panic!("'num_chasers' must be positive"); }
+        if max_time <= 0.0 { panic!("'max_time' must be positive"); }
+        if !max_time.is_finite() { panic!("'max_time' must be finite"); }
+        if max_load == 0 { panic!("'max_load' must be positive"); }
+        
+        let debris = states.len().saturating_sub(1);
+        let totcap = num_chasers.saturating_mul(max_load);
+        if totcap < debris { panic!("insufficient capacity over the swarm"); }
 
-        let time_horizon_from_constraint = constraints
-            .iter()
-            .filter_map(|c| c.as_any().downcast_ref::<MaxTime>())
-            .map(|c| c.tmax)
-            .fold(None, |acc: Option<f64>, t| Some(acc.map_or(t, |a| a.min(t))));
-
-        let time_horizon = match (time_horizon, time_horizon_from_constraint) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => { return Err("time horizon not provided".into()) }
-        };
-
-        if !time_horizon.is_finite() {
-            return Err("time horizon is not finite".into());
-        }
-
-        Ok(Self {
-            catalog,
+        Self {
+            states,
             num_chasers,
-            num_debris,
-            time_horizon,
-            constraints,
-            objective,
-        })
+            max_time,
+            max_load,
+        }
     }
 
-    /// Debris indices in the catalog (depot excluded).
-    pub fn debris(&self) -> Vec<usize> {
-        (self.catalog.num_depots()..self.catalog.n).collect()
+    /// Number of debris to collect (depot excluded).
+    #[inline]
+    pub fn num_debris(&self) -> usize {
+        self.states.len().saturating_sub(1)
     }
 
-    /// Tightest `MaxCost` upper bound on a feasible plan's cost across the
-    /// constraints, or `+inf` if none bounds the cost.
-    pub fn cost_cap(&self) -> f64 {
-        self.constraints
-            .iter()
-            .filter_map(|c| c.as_any().downcast_ref::<MaxCost>())
-            .map(|c| c.cmax)
-            .fold(f64::INFINITY, f64::min)
+    /// Debris indices.
+    pub fn debris(&self) -> std::ops::Range<usize> {
+        1..self.states.len()
     }
 
-    /// Per-constraint violations of a plan.
-    pub fn plan_violations(&self, plan: &ChaserPlan) -> Vec<f64> {
-        self.constraints.iter().map(|c| c.violation(plan)).collect()
+    /// Whether one chaser plan is respects operational limits.
+    pub fn is_plan_feasible(&self, plan: &ChaserPlan) -> bool {
+        plan.load() <= self.max_load
+            && plan.time() <= self.max_time + Self::TIME_TOLERANCE
+            && plan.cost().is_finite()
     }
 
-    /// Whether a plan satisfies all constraints within tolerance `tol`.
-    pub fn is_feasible_tol(&self, plan: &ChaserPlan, tol: f64) -> bool {
-        self.constraints.iter().all(|c| c.satisfied(plan, tol))
-    }
-
-    /// Whether a plan satisfies all constraints within the default tolerance.
-    pub fn is_feasible(&self, plan: &ChaserPlan) -> bool {
-        self.is_feasible_tol(plan, DEFAULT_TOL)
+    /// Whether every plan of a mission respects operational limits.
+    pub fn is_feasible(&self, mission: &MissionPlan) -> bool {
+        mission.plans.iter().all(|p| self.is_plan_feasible(p))
     }
 }
 
-// ========================================================================= //
-// Utilities
-// ========================================================================= //
-
-/// Helper for problem construction from basic parameters.
-pub fn make_problem(
-    debris: &Catalog,
-    num_chasers: usize,
-    max_time: Option<f64>,
-    max_load: Option<usize>,
-    max_cost: Option<f64>,
-    objective: &str,
-) -> Result<Problem, Box<dyn Error>> {
-    
-    let mut catalog = Catalog::new(
-        debris.a.clone(),
-        debris.e.clone(),
-        debris.i.clone(),
-        debris.r.clone(),
-        debris.o.clone(),
-        debris.t.clone(),
-    );
-    catalog.add_depot();
-
-    let mut constraints: Vec<Box<dyn Constraint>> = Vec::new();
-    if let Some(t) = max_time {
-        constraints.push(Box::new(MaxTime::new(t)));
+impl fmt::Display for Problem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Problem")?;
+        writeln!(f, "  num_chasers: {}", self.num_chasers)?;
+        writeln!(f, "  num_states : {} (including swarm)", self.states.len())?;
+        writeln!(f, "  max_time   : {:.2} days", self.max_time / DAY)?;
+        writeln!(f, "  max_load   : {} debris", self.max_load)
     }
-    if let Some(c) = max_cost {
-        constraints.push(Box::new(MaxCost::new(c)));
-    }
-    if let Some(q) = max_load {
-        if debris.len() > q * num_chasers {
-            return Err(format!("load constraint is trivially infeasible").into());
-        }
-        constraints.push(Box::new(MaxLoad::new(q)));
-    }
-
-    let objective: Box<dyn Objective> = match objective {
-        "sum" => Box::new(ObjectiveSum),
-        "max" => Box::new(ObjectiveMax),
-        other => return Err(format!("unknown objective: {other:?}").into()),
-    };
-
-    Problem::new(catalog, num_chasers, None, constraints, Some(objective))
 }

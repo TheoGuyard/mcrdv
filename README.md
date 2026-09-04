@@ -1,38 +1,93 @@
-# SCORPION
+# mcrdv — Multi-Chaser Rendezvous
 
-[![Rust](https://img.shields.io/badge/Rust-1.91+-black?logo=rust&logoColor=white)](https://github.com/TheoGuyard/scorpion/blob/main/LICENSE)
-[![License](https://img.shields.io/badge/License-MIT-red.svg)](https://github.com/TheoGuyard/scorpion/blob/main/LICENSE)
+`mcrdv` is a **multi-chaser rendrezvous** mission planner: given a
+orbital states to visit and a swarm of chaser spacecraft, it decides *which*
+chaser visit *which* state, *in what order*, and *when* it departs, so that
+all orbital states are visited at the lowest possible mission cost.
 
-
-**S**equencing via **C**ombinatorial **O**ptimization for **R**endezvous **P**lanning and **I**ntelligent **O**rbital **N**avigation
-
-
-
-`scorpion` is a solver for coordinating **space debris remediation** with a **swarm of chasers** spacecraft. 
-Given a cloud of debris and operational constraints, it constructs sequence of debris to be collected for each chaser while optimizing the mission cost.
-
+The package is:
+- **Efficient -** Datasets up to thousands of orbital states and swarms with tens of chasers can be solved within minutes.
+- **Flexible -** Custom implementation can be used to define the underlying orbital dynamics, as well as the mission operational constraints and objective.
+- **Modular -** The solver is built as a stack of layers to construct the mission plan, each of which can be replaced with a custom implementation.
 
 ## Quickstart
 
-`scorpion` is written in [Rust](https://www.rust-lang.org/). It can be downloaded and run with the following commands:
+```rust
+use std::rc::Rc;
+use mcrdv::{centroid, format_mission, read_debris, DAY};
+use mcrdv::{DpSchedule, HgsSequence, Problem, QlawTransfer, Solver};
 
-```bash
-git clone https://github.com/TheoGuyard/scorpion.git
-cd scorpion
-cargo run
+// Load a debris catalogue.
+let path = "data/iridium33.csv";
+let debris = read_debris(path);
+println!("Loaded {} debris from {path}", debris.len());
+
+// Index 0 is the orbit the chasers depart from, by convention.
+let mut states = vec![centroid(&debris)];
+states.extend(debris);
+
+// Define the instance and its operational limits.
+let problem = Rc::new(Problem::new(
+    states,
+    15,           // chasers in the swarm
+    365.0 * DAY,  // per-chaser mission duration limit
+    10,           // per-chaser debris capacity
+));
+println!("{problem}");
+
+// Build the solver layer stack from the bottom up.
+let transfer = QlawTransfer::new();
+let schedule = DpSchedule::new(transfer);
+let sequence = HgsSequence::new(schedule);
+let mut solver = Solver::new(sequence);
+
+// Solver the problem
+let mission = solver.solve(&problem);
+
+println!("{}", format_mission(&problem, &mission));
 ```
 
-which triggers the main entry point of the code in [src/main.rs](src/main.rs), defining the problem instance and solver parameters.
+A CSV with one debris per row, six Keplerian elements. The header is mandatory
+and checked:
 
+```
+a[m],e[prop],i[rad],r[rad],o[rad],t[rad]
+7164040.5518,0.0019,1.5079,2.8765,0.8909,5.3923
+```
 
-## I/O format
+Semi-major axis `a` [m], eccentricity `e`, inclination `i` [rad], RAAN `r`
+[rad], argument of perigee `o` [rad], true anomaly `t` [rad]. The secular $J_2$
+drift rates are derived on construction and carried through propagation.
 
-The input of `scorpion` is a `.csv` file with one row per debris object, represented in [Keplerian elements](https://en.wikipedia.org/wiki/Kepler_orbit). The first line must be the following header `a[m],e[prop],i[rad],r[rad],o[rad],t[rad]`, and each subsequent line contains 6 comma-separated floating-point values for the following parameters with their respective units:
-* `a[m]`: semi-major axis in meters
-* `e[prop]`: eccentricity as a proportion in [0,1]
-* `i[rad]`: inclination in radians
-* `r[rad]`: right ascension of ascending node  in radians
-* `o[rad]`: argument of perigee in radians
-* `t[rad]`: true anomaly in radians
+Five catalogues ship in `data/`: `odrc` (13), `cosmos1408` (4), `iridium33`
+(110), `cosmos2251` (583) and `fengyun1C` (1847).
 
-See the [data](data/) folder for example input files.
+## Extending
+
+Implement the trait for the layer you want to replace and nest it in the stack:
+
+```rust
+use mcrdv::TransferLayer;
+
+struct MyTransfer { /* ... */ }
+
+impl TransferLayer for MyTransfer {
+    fn initialize(&mut self, problem: &Problem) { /* ... */ }
+    fn evaluate(&self, i: usize, j: usize, t: f64) -> (f64, f64) { /* ... */ }
+    fn evaluate_lb(&self, i: usize, j: usize, t: f64) -> (f64, f64) { /* ... */ }
+    fn hints(&self, i: usize, j: usize, t: f64) -> Vec<f64> { /* ... */ }
+}
+```
+
+## Tests
+
+Tests can be run as follows:
+
+```bash
+cargo test --release
+cargo clippy --all-targets
+```
+
+## License
+
+This project is distributed under the [MIT license](LICENSE).

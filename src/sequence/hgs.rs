@@ -1,85 +1,113 @@
-//! Hybrid Genetic Search sequence layer.
+//! Sequence layer based on a hybrid genetic search.
 
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::Instant;
 
+use crate::orbit::TAU;
+use crate::problem::{ChaserPlan, MissionPlan, Problem, DEPOT};
+use crate::solver::{ScheduleLayer, SequenceLayer};
+
 use rand::rngs::SmallRng;
-use rand::seq::SliceRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, SeedableRng};
-
-use crate::problem::{ChaserPlan, Constraint, MissionPlan, Objective, Problem};
-use crate::solver::{ScheduleLayer, SequenceLayer, TransferLayer};
-
-fn fcmp(a: f64, b: f64) -> Ordering {
-    a.partial_cmp(&b).unwrap_or(Ordering::Equal)
-}
 
 // ========================================================================= //
 // Configuration
 // ========================================================================= //
 
+/// Giant-tour ordering strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HgsGeneration {
-    /// Randomly assign debris to chaser plans.
-    Random,
-    /// Nearest-neighbor greedy assignment.
-    Greedy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HgsOrdering {
-    /// Keep plans in their construction order.
+pub enum Ordering {
+    /// Keep the plans in the order they were built.
     Index,
-    /// Order plans by ascending mean RAAN.
+    /// By circular mean RAAN, read at the times the debris are visited.
     Raan,
-    /// Chain plans greedily by transfer cost at their boundaries.
+    /// Chain the plans greedily by the cost of the transfer joining them.
     Nearest,
 }
 
+/// Crossover operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HgsCrossover {
+pub enum Crossover {
     /// Order crossover on the giant tour.
     Ox,
     /// Edge-recombination crossover on the giant tour.
     Erx,
-    /// Selective plan exchange between the parent plan sets.
+    /// Selective exchange of whole chaser plans.
     Srex,
 }
 
-#[derive(Debug, Clone)]
+/// Initial population generation strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Generation {
+    /// Nearest-neighbor construction on the cheapest reachable debris.
+    Greedy,
+    /// Random assignment of debris to chasers.
+    Random,
+}
+
+/// Hybrid genetic search configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HgsConfig {
+    // -- global -----------------------------------------------------------
+    /// Random seed.
     pub seed: u64,
-    // termination
-    pub max_iter: usize,
-    pub max_nimp: usize,
-    pub max_time: f64,
+    /// Toggle verbosity.
+    pub verbose: bool,
+    /// Verbosity iteration step.
     pub log_iter: usize,
-    // generation
-    pub generation: HgsGeneration,
+    /// Maximum number of iterations.
+    pub max_iter: usize,
+    /// Maximum number of iterations without improvement.
+    pub max_nimp: usize,
+    /// Maximum time budget in seconds.
+    pub max_time: f64,
+
+    // -- generation -------------------------------------------------------
+    /// Strategy used to build the initial population.
+    pub generation: Generation,
+    /// Number of individuals in the initial population.
     pub pop_init: usize,
-    // population
+
+    // -- population -------------------------------------------------------
+    /// Minimum population size.
     pub pop_min: usize,
+    /// Maximum population size.
     pub pop_max: usize,
+    /// Number of nearest individuals averaged in the diversity measure.
     pub nb_close: usize,
+    /// Number of elite individuals with no diversity measure.
     pub nb_elite: usize,
+    /// Number of iterations between penalties adaptation.
     pub adapt_iter: usize,
+    /// Distance below which two individuals count as clones.
     pub clone_eps: f64,
-    // crossover
+
+    // -- crossover --------------------------------------------------------
+    /// Number of candidates drawn in each parent tournament.
     pub nb_pick: usize,
+    /// Infeasibility factor during split operation of a giant tour.
     pub threshold_factor: f64,
-    pub ordering: HgsOrdering,
-    pub crossover: HgsCrossover,
-    // local search
+    /// Giant-tour ordering.
+    pub ordering: Ordering,
+    /// Crossover operator.
+    pub crossover: Crossover,
+
+    // -- local search -----------------------------------------------------
+    /// Size of the neighborhood for local search moves.
     pub nb_neighbors: usize,
-    pub neighbor_samples: usize,
-    // penalties
+
+    // -- penalties --------------------------------------------------------
+    /// Multiplier applied to increase a penalty.
     pub penalty_increase: f64,
+    /// Multiplier applied to decrease a penalty.
     pub penalty_decrease: f64,
+    /// Lower bound on the penalties range.
     pub penalty_min: f64,
+    /// Upper bound on the penalties range.
     pub penalty_max: f64,
+    /// Target ratio of feasible individuals in the population.
     pub target_ratio: f64,
 }
 
@@ -87,30 +115,30 @@ impl Default for HgsConfig {
     fn default() -> Self {
         Self {
             seed: 0,
-            // termination
+            verbose: true,
+            log_iter: 10,
+
             max_iter: 5_000,
             max_nimp: 500,
             max_time: f64::INFINITY,
-            log_iter: 10,
-            // generation
-            generation: HgsGeneration::Greedy,
+
+            generation: Generation::Greedy,
             pop_init: 20,
-            // population
+
             pop_min: 10,
             pop_max: 20,
             nb_close: 2,
             nb_elite: 3,
             adapt_iter: 10,
             clone_eps: 1e-6,
-            // crossover
-            nb_pick: 2,
+
+            nb_pick: 4,
             threshold_factor: 1.5,
-            ordering: HgsOrdering::Raan,
-            crossover: HgsCrossover::Ox,
-            // local search
+            ordering: Ordering::Nearest,
+            crossover: Crossover::Ox,
+
             nb_neighbors: 10,
-            neighbor_samples: 16,
-            // penalties
+
             penalty_increase: 2.0,
             penalty_decrease: 0.5,
             penalty_min: 1e-9,
@@ -121,363 +149,190 @@ impl Default for HgsConfig {
 }
 
 impl HgsConfig {
+    /// Preset configuration with level from 0 to 6 (higher = deeper search).
     pub fn preset(level: usize) -> Self {
-        let mut config = Self::default();
-        if level > 6 { panic!("HGS preset level must be between 0 and 6."); }
-        match level.min(6) {
-            0 => {
-                // Local search on a single initial individual
-                config.log_iter = 1;
-                config.max_iter = 0;
-                config.max_nimp = 0;
-                config.pop_init = 1;
-                config.pop_min = 2;
-                config.pop_max = 2;
-                config.nb_close = 1;
-                config.nb_elite = 1;
-            }
-            1 => {
-                // Local search on multiple initial individuals
-                config.log_iter = 1;
-                config.max_iter = 0;
-                config.max_nimp = 0;
-                config.pop_init = 5;
-                config.pop_min = 2;
-                config.pop_max = 3;
-                config.nb_close = 1;
-                config.nb_elite = 1;
-            }
-            2 => {
-                // Very shallow genetic selection
-                config.log_iter = 1;
-                config.max_iter = 50;
-                config.max_nimp = 10;
-                config.pop_init = 6;
-                config.pop_min = 3;
-                config.pop_max = 6;
-                config.nb_close = 1;
-                config.nb_elite = 1;
-            }
-            3 => {
-                // Shallow genetic selection
-                config.log_iter = 1;
-                config.max_iter = 500;
-                config.max_nimp = 100;
-                config.pop_init = 10;
-                config.pop_min = 5;
-                config.pop_max = 10;
-                config.nb_close = 2;
-                config.nb_elite = 2;
-            }
-            4 => {
-                // Medium genetic selection
-                config.log_iter = 10;
-                config.max_iter = 5_000;
-                config.max_nimp = 500;
-                config.pop_init = 20;
-                config.pop_min = 10;
-                config.pop_max = 20;
-                config.nb_close = 2;
-                config.nb_elite = 3;
-            }
-            5 => {
-                // Deep genetic selection
-                config.log_iter = 10;
-                config.max_iter = 50_000;
-                config.max_nimp = 5_000;
-                config.pop_init = 24;
-                config.pop_min = 12;
-                config.pop_max = 32;
-                config.nb_close = 3;
-                config.nb_elite = 4;
-            }
-            6 => {
-                // Very deep genetic selection
-                config.log_iter = 100;
-                config.max_iter = 200_000;
-                config.max_nimp = 10_000;
-                config.pop_init = 50;
-                config.pop_min = 25;
-                config.pop_max = 65;
-                config.nb_close = 3;
-                config.nb_elite = 8;
-            }
-            // Unreachable: `level.min(6)` keeps the match exhaustive over 0..=6.
-            _ => {}
-        }
-        config
-    }
-}
-
-// ========================================================================= //
-// Context
-// ========================================================================= //
-
-/// Context helper with shared data, search state and methods across one solve.
-struct Ctx<'a> {
-    problem: &'a Problem,
-    transfer: &'a dyn TransferLayer,
-    schedule: &'a dyn ScheduleLayer,
-    config: &'a HgsConfig,
-    depot: usize,
-    debris: Vec<usize>,
-    neighbors: Vec<Vec<usize>>,
-    metric: Metric,
-    population: Population,
-}
-
-impl<'a> Ctx<'a> {
-    fn new(
-        problem: &'a Problem,
-        transfer: &'a dyn TransferLayer,
-        schedule: &'a dyn ScheduleLayer,
-        config: &'a HgsConfig,
-    ) -> Self {
-        assert!(problem.catalog.depots_indices() == [0], "HGS only supports a single depot");
-        let neighbors = build_neighbors(problem, transfer, config);
-        Ctx {
-            problem,
-            transfer,
-            schedule,
-            config,
-            depot: 0,
-            debris: problem.debris(),
-            neighbors,
-            metric: Metric::new(problem, transfer, 0, config),
-            population: Population::new(problem),
+        // log, iter, nimp, init, min, max, close, elite
+        let table = [
+            (1usize, 0usize, 0usize, 1usize, 2usize, 2usize, 1usize, 1usize),
+            (1, 0, 0, 5, 2, 3, 1, 1),
+            (1, 50, 10, 6, 3, 6, 1, 1),
+            (1, 500, 100, 10, 5, 10, 2, 2),
+            (10, 5_000, 500, 20, 10, 20, 2, 3),
+            (10, 50_000, 5_000, 24, 12, 32, 3, 4),
+            (100, 200_000, 10_000, 50, 25, 65, 3, 8),
+        ];
+        let &(log, iter, nimp, init, lo, hi, close, elite) = table
+            .get(level)
+            .expect("HGS preset level must be between 0 and 6");
+        Self {
+            log_iter: log,
+            max_iter: iter,
+            max_nimp: nimp,
+            pop_init: init,
+            pop_min: lo,
+            pop_max: hi,
+            nb_close: close,
+            nb_elite: elite,
+            ..Self::default()
         }
     }
 
-    /// Insert an individual into the population (adapting penalties as needed).
-    fn add(&mut self, ind: Individual) {
-        self.population.add(self.config, &self.debris, &mut self.metric, ind);
+    /// Set configuration seed.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
     }
 
-    /// Best individual currently in the population.
-    fn best(&self) -> Option<Individual> {
-        self.population.best(&self.metric)
+    /// Set configuration verbosity.
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
     }
-
-    /// Penalized value of the current best individual.
-    fn best_value(&self) -> f64 {
-        self.best().map_or(f64::INFINITY, |b| self.metric.value(&b))
-    }
-
-    fn constraints(&self) -> &[Box<dyn Constraint>] {
-        &self.problem.constraints
-    }
-
-    fn objective(&self) -> &dyn Objective {
-        self.problem.objective.as_ref()
-    }
-
-    /// Evaluate a partial debris sequence (depot prepended).
-    fn eval_debris(&self, debris: &[usize]) -> Rc<ChaserPlan> {
-        let mut seq = Vec::with_capacity(debris.len() + 1);
-        seq.push(self.depot);
-        seq.extend_from_slice(debris);
-        self.schedule.evaluate(&seq)
-    }
-
-    /// Evaluate a chaser sequence (assuming depot in first position).
-    fn eval(&self, seq: &[usize]) -> Rc<ChaserPlan> {
-        self.schedule.evaluate(seq)
-    }
-
-    /// Cheap cost lower bound of a chaser sequence, used to screen moves before
-    /// paying for the full schedule evaluation. Since the penalty term is always
-    /// non-negative, `plan_value >= cost >= lb`, so a candidate whose lb already
-    /// reaches the value to beat cannot improve and can be skipped.
-    fn lb(&self, seq: &[usize]) -> f64 {
-        self.schedule.evaluate_lb(seq)
-    }
-
-    /// Per-constraint violation of a chaser plan.
-    fn plan_excess(&self, plan: &ChaserPlan) -> Vec<f64> {
-        self.constraints()
-            .iter()
-            .map(|c| c.violation(plan).max(0.0))
-            .collect()
-    }
-}
-
-/// Mean orbital-distance between two nodes over the horizon.
-fn orbital_distance(problem: &Problem, transfer: &dyn TransferLayer, config: &HgsConfig, i: usize, j: usize) -> f64 {
-    let m = config.neighbor_samples.max(1);
-    let horizon = problem.time_horizon;
-    let mut s = 0.0;
-    for q in 0..m {
-        let t = horizon * (q as f64 + 0.5) / m as f64;
-        s += transfer.evaluate(i, j, t).1;
-    }
-    s / m as f64
-}
-
-/// Build per-debris neighbor lists ordered by the orbital-distance proxy.
-fn build_neighbors(problem: &Problem, transfer: &dyn TransferLayer, config: &HgsConfig) -> Vec<Vec<usize>> {
-    let debris = problem.debris();
-    let mut neighbors = vec![Vec::new(); problem.catalog.n];
-    for &i in &debris {
-        let mut others: Vec<usize> = debris.iter().copied().filter(|&j| j != i).collect();
-        others.sort_by(|&a, &b| {
-            fcmp(
-                orbital_distance(problem, transfer, config, i, a),
-                orbital_distance(problem, transfer, config, i, b),
-            )
-        });
-        others.truncate(config.nb_neighbors);
-        neighbors[i] = others;
-    }
-    neighbors
 }
 
 // ========================================================================= //
 // Individual
 // ========================================================================= //
 
-/// A candidate mission: one chaser plan per chaser, with derived metrics.
-#[derive(Clone)]
-struct Individual {
-    plans: Vec<Rc<ChaserPlan>>,
-    cost: f64,
-    feasible: bool,
-    violation: Vec<f64>,
-    active: usize,
-    pred: Vec<usize>,
-    succ: Vec<usize>,
+/// Individual in the population as a candidate mission plan.
+#[derive(Debug, Clone)]
+pub struct Individual {
+    /// One plan per chaser, some possibly idle.
+    pub plans: Vec<Rc<ChaserPlan>>,
+    /// Mission cost, the sum of the chaser plan costs.
+    pub cost: f64,
+    /// Total excess over the load limit, and over the duration limit.
+    pub violation: [f64; 2],
+    /// Whether every plan satisfies both operational limits.
+    pub feasible: bool,
+    /// Number of chasers that actually collect something.
+    pub active: usize,
+    /// For each debris, the object visited just before it, [`DEPOT`] for none.
+    pub pred: Vec<usize>,
+    /// For each debris, the object visited just after it, [`DEPOT`] for none.
+    pub succ: Vec<usize>,
 }
 
 impl Individual {
-    fn new(ctx: &Ctx, plans: Vec<Rc<ChaserPlan>>) -> Self {
-        let nc = ctx.constraints().len();
-        let costs: Vec<f64> = plans.iter().map(|r| r.cost).collect();
-        let cost = ctx.objective().aggregate(&costs);
-        let feasible = plans.iter().all(|r| r.feasible);
-        let mut violation = vec![0.0; nc];
-        let mut active = 0;
-        let mut pred = vec![0usize; ctx.problem.catalog.n];
-        let mut succ = vec![0usize; ctx.problem.catalog.n];
-        for plan in &plans {
-            if nc > 0 {
-                for (c, e) in ctx.plan_excess(plan).into_iter().enumerate() {
-                    violation[c] += e;
-                }
-            }
-            let seq = &plan.nodes_indices;
-            if seq.len() > 1 {
-                active += 1;
-                let n = seq.len();
-                for i in 1..n {
-                    let d = seq[i];
-                    pred[d] = if i == 1 { ctx.depot } else { seq[i - 1] };
-                    succ[d] = if i == n - 1 { ctx.depot } else { seq[i + 1] };
-                }
-            }
-        }
-        Self {
+    /// Derive every ranking quantity from a set of chaser plans.
+    pub fn new(problem: &Rc<Problem>, plans: Vec<Rc<ChaserPlan>>) -> Self {
+        let n = problem.states.len();
+        let mut individual = Self {
             plans,
-            cost,
-            feasible,
-            violation,
-            active,
-            pred,
-            succ,
-        }
+            cost: 0.0,
+            violation: [0.0, 0.0],
+            feasible: true,
+            active: 0,
+            pred: vec![DEPOT; n],
+            succ: vec![DEPOT; n],
+        };
+        individual.refresh(problem);
+        individual
     }
 
-    /// Recompute derived metrics after the plans were mutated.
-    fn refresh(&mut self, ctx: &Ctx) {
-        let plans = std::mem::take(&mut self.plans);
-        *self = Individual::new(ctx, plans);
+    /// Recompute the derived quantities after the plans were replaced.
+    pub fn refresh(&mut self, problem: &Rc<Problem>) {
+        self.cost = self.plans.iter().map(|p| p.cost()).sum();
+        self.pred.iter_mut().for_each(|x| *x = DEPOT);
+        self.succ.iter_mut().for_each(|x| *x = DEPOT);
+
+        let mut load_excess = 0.0;
+        let mut time_excess = 0.0;
+        self.active = 0;
+        self.feasible = true;
+
+        for plan in &self.plans {
+            load_excess += plan.load().saturating_sub(problem.max_load) as f64;
+            time_excess += (plan.time() - problem.max_time).max(0.0);
+            self.feasible &= problem.is_plan_feasible(plan);
+
+            let seq = &plan.sequence;
+            if seq.len() > 1 {
+                self.active += 1;
+                let last = seq.len() - 1;
+                for i in 1..seq.len() {
+                    let d = seq[i];
+                    self.pred[d] = if i == 1 { DEPOT } else { seq[i - 1] };
+                    self.succ[d] = if i == last { DEPOT } else { seq[i + 1] };
+                }
+            }
+        }
+        self.violation = [load_excess, time_excess];
     }
 }
 
-/// Normalized broken-pairs distance between two individuals.
-fn broken_pair_distance(a: &Individual, b: &Individual, debris: &[usize]) -> f64 {
-    let n = debris.len();
-    if n == 0 {
+/// Broken-pair distance between two individuals.
+pub fn broken_pair_distance(a: &Individual, b: &Individual, debris: &[usize]) -> f64 {
+    if debris.is_empty() {
         return 0.0;
     }
     let mut count = 0usize;
     for &d in debris {
         let (asucc, bsucc) = (a.succ[d], b.succ[d]);
         let (apred, bpred) = (a.pred[d], b.pred[d]);
-        let broken = asucc != bsucc && asucc != bpred;
-        let orphan = apred == 0 && bpred != 0 && bsucc != 0;
-        count += broken as usize + orphan as usize;
+        count += usize::from(asucc != bsucc && asucc != bpred);
+        count += usize::from(apred == DEPOT && bpred != DEPOT && bsucc != DEPOT);
     }
-    count as f64 / n as f64
+    count as f64 / debris.len() as f64
 }
 
-// ========================================================================= //
-// Metric
-// ========================================================================= //
-
-/// Penalized cost with one adaptive penalty per problem constraint.
-struct Metric {
-    penalties: Vec<f64>,
+/// Unified metric to evaluate both feasible and infeasible individuals.
+#[derive(Debug, Clone)]
+pub struct Metric {
+    /// Constraint penalties: [load, time]
+    pub penalties: [f64; 2],
+    config: HgsConfig,
 }
 
 impl Metric {
-    fn new(
-        problem: &Problem, 
-        transfer: &dyn TransferLayer, 
-        depot: usize, 
-        config: &HgsConfig
-    ) -> Self {
-        // Scale each penalty in magnitude ~ total cost / unitary violation
-        let cost: f64 = problem
+    /// Initialize metric and scale the penalties to the instance.
+    pub fn new<S: ScheduleLayer>(problem: &Rc<Problem>, schedule: &S, config: HgsConfig) -> Self {
+        let scale = problem
             .debris()
-            .iter()
-            .map(|&d| transfer.evaluate_lb(depot, d).1)
+            .map(|d| schedule.evaluate_lb(&[DEPOT, d]))
             .sum::<f64>()
             .max(1.0);
-        let empty = ChaserPlan::empty();
-        let penalties = problem
-            .constraints
-            .iter()
-            .map(
-                |c| 
-                (-cost / c.violation(&empty)).clamp(
-                    config.penalty_min, 
-                    config.penalty_max
-                )
-            )
-            .collect();
-        Self { penalties }
+        let clamp = |x: f64| x.max(config.penalty_min).min(config.penalty_max);
+        Self {
+            penalties: [
+                clamp(scale / problem.max_load as f64),
+                clamp(scale / problem.max_time),
+            ],
+            config,
+        }
     }
 
-    fn plan_value(&self, problem: &Problem, plan: &ChaserPlan) -> f64 {
-        if self.penalties.is_empty() { return plan.cost; }
-        plan.cost + problem.constraints
+    /// Penalized cost of a single chaser plan.
+    pub fn plan_value(&self, problem: &Rc<Problem>, plan: &ChaserPlan) -> f64 {
+        let excesses = [
+            plan.load().saturating_sub(problem.max_load) as f64,
+            (plan.time() - problem.max_time).max(0.0)
+        ];
+        plan.cost() + self.penalties
             .iter()
-            .zip(&self.penalties)
-            .map(|(c, p)| p * c.violation(plan).max(0.0))
-            .sum::<f64>()
+            .zip(excesses)
+            .map(|(p, e)| p * e).sum::<f64>()
     }
 
-    fn value(&self, ind: &Individual) -> f64 {
-        if self.penalties.is_empty() { return ind.cost; }
-        ind.cost + ind.violation
+    /// Penalized cost of a whole mission plan.
+    pub fn value(&self, individual: &Individual) -> f64 {
+        individual.cost + self.penalties
             .iter()
-            .zip(&self.penalties)
-            .map(|(e, p)| e * p)
-            .sum::<f64>()
+            .zip(individual.violation)
+            .map(|(p, v)| p * v).sum::<f64>()
     }
 
-    fn adapt(&mut self, config: &HgsConfig, ratios: &[f64]) {
-        for (c, &ratio) in ratios.iter().enumerate() {
-            self.penalties[c] = if ratio < config.target_ratio {
-                (config.penalty_increase * self.penalties[c]).clamp(
-                    config.penalty_min,
-                    config.penalty_max
-                )
+    /// Raise the penalties that are too weak, lower those that are too strong.
+    pub fn adapt(&mut self, ratios: [f64; 2]) {
+        for (penalty, ratio) in self.penalties.iter_mut().zip(ratios) {
+            let factor = if ratio < self.config.target_ratio {
+                self.config.penalty_increase
             } else {
-                (config.penalty_decrease * self.penalties[c]).clamp(
-                    config.penalty_min,
-                    config.penalty_max
-                )
+                self.config.penalty_decrease
             };
+            *penalty = (factor * *penalty)
+                .max(self.config.penalty_min)
+                .min(self.config.penalty_max);
         }
     }
 }
@@ -486,49 +341,70 @@ impl Metric {
 // Population
 // ========================================================================= //
 
-struct Subpopulation {
-    individuals: Vec<Individual>,
-    score: Vec<f64>,
+/// Subpopulation of feasible or infeasible individuals.
+#[derive(Debug, Clone)]
+pub struct Subpopulation {
+    /// The individuals of the subpopulation.
+    pub individuals: Vec<Individual>,
+    /// Biased fitness of each individual (lower is better).
+    pub score: Vec<f64>,
+    /// Pairwise broken-pair distances between the individuals.
     dist: Vec<Vec<f64>>,
+    config: HgsConfig,
 }
 
 impl Subpopulation {
-    fn new() -> Self {
+    /// An empty subpopulation.
+    pub fn new(config: HgsConfig) -> Self {
         Self {
             individuals: Vec::new(),
             score: Vec::new(),
             dist: Vec::new(),
+            config,
         }
     }
 
-    fn add(&mut self, config: &HgsConfig, debris: &[usize], metric: &Metric, ind: Individual) {
-        let m = self.individuals.len();
-        let row: Vec<f64> = (0..m)
-            .map(|j| broken_pair_distance(&ind, &self.individuals[j], debris))
+    /// Number of individuals held.
+    pub fn len(&self) -> usize {
+        self.individuals.len()
+    }
+
+    /// Whether no individual is held.
+    pub fn is_empty(&self) -> bool {
+        self.individuals.is_empty()
+    }
+
+    /// Insert an individual, trimming the subpopulation if it overflows.
+    pub fn add(&mut self, debris: &[usize], metric: &Metric, individual: Individual) {
+        let mut row: Vec<f64> = self
+            .individuals
+            .iter()
+            .map(|other| broken_pair_distance(&individual, other, debris))
             .collect();
-        for (j, r) in self.dist.iter_mut().enumerate() {
-            r.push(row[j]);
+        for (j, previous) in self.dist.iter_mut().enumerate() {
+            previous.push(row[j]);
         }
-        let mut new_row = row;
-        new_row.push(0.0);
-        self.dist.push(new_row);
-        self.individuals.push(ind);
+        row.push(0.0);
+        self.dist.push(row);
+        self.individuals.push(individual);
 
-        self.update_score(config, metric);
-        if self.individuals.len() > config.pop_max {
-            self.survivors_selection(config, metric);
-        }
-    }
-
-    fn remove(&mut self, idx: usize) {
-        self.individuals.remove(idx);
-        self.dist.remove(idx);
-        for r in self.dist.iter_mut() {
-            r.remove(idx);
+        self.update_score(metric);
+        if self.individuals.len() > self.config.pop_max {
+            self.survivors_selection(metric);
         }
     }
 
-    fn update_score(&mut self, config: &HgsConfig, metric: &Metric) {
+    /// Drop one individual and the distance row and column that describe it.
+    fn remove(&mut self, index: usize) {
+        self.individuals.remove(index);
+        self.dist.remove(index);
+        for row in &mut self.dist {
+            row.remove(index);
+        }
+    }
+
+    /// Recompute the biased fitness of every individual.
+    pub fn update_score(&mut self, metric: &Metric) {
         let n = self.individuals.len();
         self.score = vec![0.0; n];
         if n <= 1 {
@@ -536,1189 +412,1298 @@ impl Subpopulation {
         }
         let denom = (n - 1) as f64;
 
-        // Cost rank.
+        // Rank on penalized cost, cheapest first.
         let values: Vec<f64> = self.individuals.iter().map(|i| metric.value(i)).collect();
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| fcmp(values[a], values[b]));
+        let mut by_cost: Vec<usize> = (0..n).collect();
+        by_cost.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
         let mut cost_pos = vec![0usize; n];
-        for (rank, &idx) in order.iter().enumerate() {
-            cost_pos[idx] = rank;
+        for (rank, &i) in by_cost.iter().enumerate() {
+            cost_pos[i] = rank;
         }
 
-        // Diversity rank (descending average distance to the nb_close nearest),
-        // read from the maintained distance matrix.
-        let kk = config.nb_close.min(n - 1);
-        let mut avg_dist = vec![0.0; n];
-        if kk > 0 {
-            for (i, a) in avg_dist.iter_mut().enumerate() {
-                let mut ds: Vec<f64> = (0..n).filter(|&j| j != i).map(|j| self.dist[i][j]).collect();
-                ds.sort_by(|x, y| fcmp(*x, *y));
-                *a = ds[..kk].iter().sum::<f64>() / kk as f64;
+        // Rank on diversity, most isolated first, from the maintained matrix.
+        let close = self.config.nb_close.min(n - 1);
+        let mut spread = vec![0.0; n];
+        if close > 0 {
+            for (i, value) in spread.iter_mut().enumerate() {
+                let mut others: Vec<f64> = (0..n)
+                    .filter(|&j| j != i)
+                    .map(|j| self.dist[i][j])
+                    .collect();
+                others.sort_by(f64::total_cmp);
+                *value = others[..close].iter().sum::<f64>() / close as f64;
             }
         }
-        let mut div_order: Vec<usize> = (0..n).collect();
-        div_order.sort_by(|&a, &b| fcmp(avg_dist[b], avg_dist[a]));
+        let mut by_spread: Vec<usize> = (0..n).collect();
+        by_spread.sort_by(|&a, &b| spread[b].total_cmp(&spread[a]));
         let mut div_pos = vec![0usize; n];
-        for (rank, &idx) in div_order.iter().enumerate() {
-            div_pos[idx] = rank;
+        for (rank, &i) in by_spread.iter().enumerate() {
+            div_pos[i] = rank;
         }
 
-        let scale = 1.0 - config.nb_elite as f64 / n as f64;
+        let scale = 1.0 - self.config.nb_elite as f64 / n as f64;
         for i in 0..n {
-            let ord_rank = cost_pos[i] as f64 / denom;
-            self.score[i] = if cost_pos[i] < config.nb_elite {
-                ord_rank
+            let base = cost_pos[i] as f64 / denom;
+            self.score[i] = if cost_pos[i] < self.config.nb_elite {
+                base
             } else {
-                ord_rank + scale * div_pos[i] as f64 / denom
+                base + scale * div_pos[i] as f64 / denom
             };
         }
     }
 
-    /// Minimum distance from individual `i` to any other (self excluded).
+    /// Distance from individual `i` to its closest neighbour.
     fn nearest_min(&self, i: usize) -> f64 {
-        let mut m = f64::INFINITY;
-        for (j, &d) in self.dist[i].iter().enumerate() {
-            if j != i {
-                m = m.min(d);
-            }
-        }
-        m
+        (0..self.dist[i].len())
+            .filter(|&j| j != i)
+            .map(|j| self.dist[i][j])
+            .fold(f64::INFINITY, f64::min)
     }
 
-    fn worst_index(&self, config: &HgsConfig) -> usize {
-        let mut worst_idx = 0;
-        let mut worst_clone = self.nearest_min(0) <= config.clone_eps;
+    /// The individual to drop: a clone if there is one, else the worst ranked.
+    fn worst_index(&self) -> usize {
+        let mut worst = 0;
+        let mut worst_clone = self.nearest_min(0) <= self.config.clone_eps;
         let mut worst_score = self.score[0];
         for i in 1..self.individuals.len() {
-            let is_clone = self.nearest_min(i) <= config.clone_eps;
+            let clone = self.nearest_min(i) <= self.config.clone_eps;
             let score = self.score[i];
-            if (is_clone && !worst_clone) || (is_clone == worst_clone && score > worst_score) {
-                worst_clone = is_clone;
+            if (clone && !worst_clone) || (clone == worst_clone && score > worst_score) {
+                worst = i;
+                worst_clone = clone;
                 worst_score = score;
-                worst_idx = i;
             }
         }
-        worst_idx
+        worst
     }
 
-    fn survivors_selection(&mut self, config: &HgsConfig, metric: &Metric) {
-        while self.individuals.len() > config.pop_min {
-            let idx = self.worst_index(config);
-            self.remove(idx);
-            self.update_score(config, metric);
+    /// Trim the subpopulation back to its minimum size.
+    fn survivors_selection(&mut self, metric: &Metric) {
+        while self.individuals.len() > self.config.pop_min {
+            let index = self.worst_index();
+            self.remove(index);
+            self.update_score(metric);
         }
     }
 
-    fn best(&self, metric: &Metric) -> Option<&Individual> {
+    /// The cheapest individual held, if any.
+    pub fn best(&self, metric: &Metric) -> Option<&Individual> {
         self.individuals
             .iter()
-            .min_by(|a, b| fcmp(metric.value(a), metric.value(b)))
+            .min_by(|a, b| metric.value(a).total_cmp(&metric.value(b)))
     }
 }
 
-struct Population {
-    feasible: Subpopulation,
-    infeasible: Subpopulation,
-    windows: Vec<VecDeque<bool>>,
+/// Feasible and infeasible individual populations.
+#[derive(Debug, Clone)]
+pub struct Population {
+    /// Individuals respecting both operational limits.
+    pub feasible: Subpopulation,
+    /// Individuals violating at least one limit.
+    pub infeasible: Subpopulation,
+    /// Recent feasibility record, one window per limit.
+    windows: [Vec<bool>; 2],
+    /// Insertions so far, which paces the penalty adaptation.
     count: usize,
+    config: HgsConfig,
 }
 
 impl Population {
-    fn new(problem: &Problem) -> Self {
+    /// An empty population.
+    pub fn new(config: HgsConfig) -> Self {
         Self {
-            feasible: Subpopulation::new(),
-            infeasible: Subpopulation::new(),
-            windows: vec![VecDeque::new(); problem.constraints.len()],
+            feasible: Subpopulation::new(config),
+            infeasible: Subpopulation::new(config),
+            windows: [Vec::new(), Vec::new()],
             count: 0,
+            config,
         }
     }
 
-    fn add(&mut self, config: &HgsConfig, debris: &[usize], metric: &mut Metric, ind: Individual) {
+    /// Total number of individuals, both statuses together.
+    pub fn len(&self) -> usize {
+        self.feasible.len() + self.infeasible.len()
+    }
+
+    /// Whether the population holds nothing.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Insert an individual and periodically retune the penalties.
+    pub fn add(&mut self, debris: &[usize], metric: &mut Metric, individual: Individual) {
         self.count += 1;
-        for (c, window) in self.windows.iter_mut().enumerate() {
-            window.push_back(ind.violation[c] == 0.0);
-        }
-        if ind.feasible {
-            self.feasible.add(config, debris, metric, ind);
-        } else {
-            self.infeasible.add(config, debris, metric, ind);
+        let window = self.config.adapt_iter;
+        for (c, history) in self.windows.iter_mut().enumerate() {
+            history.push(individual.violation[c] == 0.0);
+            if window > 0 && history.len() > window {
+                let excess = history.len() - window;
+                history.drain(..excess);
+            }
         }
 
-        let adapt = config.adapt_iter;
-        if adapt > 0 && !self.windows.is_empty() && self.count.is_multiple_of(adapt) {
-            let ratios: Vec<f64> = self
-                .windows
-                .iter()
-                .map(|w| {
-                    let hits = w.iter().rev().take(adapt).filter(|&&b| b).count();
-                    hits as f64 / adapt as f64
-                })
-                .collect();
-            metric.adapt(config, &ratios);
-            self.feasible.update_score(config, metric);
-            self.infeasible.update_score(config, metric);
+        let target = if individual.feasible {
+            &mut self.feasible
+        } else {
+            &mut self.infeasible
+        };
+        target.add(debris, metric, individual);
+
+        if window > 0 && self.count % window == 0 {
+            let ratios = [
+                self.windows[0].iter().filter(|&&b| b).count() as f64 / window as f64,
+                self.windows[1].iter().filter(|&&b| b).count() as f64 / window as f64,
+            ];
+            metric.adapt(ratios);
+            self.feasible.update_score(metric);
+            self.infeasible.update_score(metric);
         }
     }
 
-    fn pick(&self, config: &HgsConfig, rng: &mut SmallRng) -> Individual {
-        let nf = self.feasible.individuals.len();
-        let ni = self.infeasible.individuals.len();
-        let total = nf + ni;
-        let k = config.nb_pick.max(1).min(total);
-        let mut chosen = 0usize;
+    /// Binary tournament over the whole population; the best rank wins.
+    pub fn pick(&self, rng: &mut SmallRng) -> Option<Individual> {
+        let total = self.len();
+        if total == 0 {
+            return None;
+        }
+        let nf = self.feasible.len();
+        let draws = self.config.nb_pick.max(1).min(total);
+
+        let mut chosen = 0;
         let mut best_score = f64::INFINITY;
-        for d in 0..k {
-            let g = rng.gen_range(0..total);
+        for d in 0..draws {
+            let g = rng.random_range(0..total);
             let score = if g < nf {
                 self.feasible.score[g]
             } else {
                 self.infeasible.score[g - nf]
             };
             if d == 0 || score < best_score {
-                best_score = score;
                 chosen = g;
+                best_score = score;
             }
         }
-        if chosen < nf {
-            self.feasible.individuals[chosen].clone()
+        let individual = if chosen < nf {
+            &self.feasible.individuals[chosen]
         } else {
-            self.infeasible.individuals[chosen - nf].clone()
-        }
-    }
-
-    fn best(&self, metric: &Metric) -> Option<Individual> {
-        self.feasible
-            .best(metric)
-            .or_else(|| self.infeasible.best(metric))
-            .cloned()
-    }
-}
-
-// ========================================================================= //
-// Generation
-// ========================================================================= //
-
-fn nowait_feasible(ctx: &Ctx, plan: &[usize], meet: &[f64], cost: &[f64]) -> bool {
-    let mut seq = Vec::with_capacity(plan.len() + 1);
-    seq.push(ctx.depot);
-    seq.extend_from_slice(plan);
-    let plan = ChaserPlan::new(
-        seq,
-        meet.to_vec(),
-        vec![0.0; meet.len()],
-        cost.to_vec(),
-        cost.iter().sum(),
-        true,
-    );
-    ctx.problem.is_feasible(&plan)
-}
-
-fn assemble(ctx: &Ctx, buckets: &[Vec<usize>]) -> Individual {
-    let empty: Vec<usize> = Vec::new();
-    let plans: Vec<Rc<ChaserPlan>> = (0..ctx.problem.num_chasers)
-        .map(|c| ctx.eval_debris(buckets.get(c).unwrap_or(&empty)))
-        .collect();
-    Individual::new(ctx, plans)
-}
-
-fn generate(ctx: &Ctx, rng: &mut SmallRng) -> Individual {
-    match ctx.config.generation {
-        HgsGeneration::Random => generate_random(ctx, rng),
-        HgsGeneration::Greedy => generate_greedy(ctx, rng),
-    }
-}
-
-fn generate_greedy(ctx: &Ctx, rng: &mut SmallRng) -> Individual {
-    let mut available = vec![false; ctx.problem.catalog.n];
-    for &d in &ctx.debris {
-        available[d] = true;
-    }
-    let mut ordered = ctx.debris.clone();
-    ordered.sort_by(|&a, &b| {
-        fcmp(
-            ctx.transfer.evaluate(ctx.depot, a, 0.0).1,
-            ctx.transfer.evaluate(ctx.depot, b, 0.0).1,
-        )
-    });
-    // Windowed shuffle so greedy seeds differ across calls.
-    let len = ordered.len();
-    for i in 0..len.saturating_sub(1) {
-        let end = (i + 4).min(len - 1);
-        let j = i + rng.gen_range(0..end - i + 1);
-        ordered.swap(i, j);
-    }
-
-    let mut buckets: Vec<Vec<usize>> = Vec::new();
-    for &start in &ordered {
-        if !available[start] || buckets.len() >= ctx.problem.num_chasers {
-            continue;
-        }
-        available[start] = false;
-        let (dt0, dv0) = ctx.transfer.evaluate(ctx.depot, start, 0.0);
-        let mut plan = vec![start];
-        let mut meet = vec![0.0, dt0];
-        let mut cost = vec![0.0, dv0];
-        loop {
-            let current = *plan.last().unwrap();
-            let t = *meet.last().unwrap();
-            let mut best: Option<usize> = None;
-            let mut best_dt = 0.0;
-            let mut best_cost = f64::INFINITY;
-            for &d in &ordered {
-                if !available[d] {
-                    continue;
-                }
-                let (leg_t, leg_f) = ctx.transfer.evaluate(current, d, t);
-                if leg_f >= best_cost {
-                    continue;
-                }
-                let mut m2 = meet.clone();
-                m2.push(t + leg_t);
-                let mut c2 = cost.clone();
-                c2.push(leg_f);
-                let mut r2 = plan.clone();
-                r2.push(d);
-                if nowait_feasible(ctx, &r2, &m2, &c2) {
-                    best = Some(d);
-                    best_dt = leg_t;
-                    best_cost = leg_f;
-                }
-            }
-            match best {
-                Some(d) => {
-                    available[d] = false;
-                    plan.push(d);
-                    meet.push(t + best_dt);
-                    cost.push(best_cost);
-                }
-                None => break,
-            }
-        }
-        buckets.push(plan);
-    }
-    let leftover: Vec<usize> = ctx.debris.iter().copied().filter(|&d| available[d]).collect();
-    if !leftover.is_empty() {
-        if buckets.is_empty() {
-            buckets.push(Vec::new());
-        }
-        buckets.last_mut().unwrap().extend(leftover);
-    }
-    assemble(ctx, &buckets)
-}
-
-fn generate_random(ctx: &Ctx, rng: &mut SmallRng) -> Individual {
-    let mut remaining = ctx.debris.clone();
-    remaining.shuffle(rng);
-    let mut buckets: Vec<Vec<usize>> = Vec::new();
-    while !remaining.is_empty() && buckets.len() < ctx.problem.num_chasers {
-        let mut plan: Vec<usize> = Vec::new();
-        let mut meet = vec![0.0];
-        let mut cost = vec![0.0];
-        let mut prev = ctx.depot;
-        let mut t = 0.0;
-        let mut i = 0;
-        while i < remaining.len() {
-            let node = remaining[i];
-            let (leg_t, leg_f) = ctx.transfer.evaluate(prev, node, t);
-            let mut m2 = meet.clone();
-            m2.push(t + leg_t);
-            let mut c2 = cost.clone();
-            c2.push(leg_f);
-            let mut r2 = plan.clone();
-            r2.push(node);
-            if !nowait_feasible(ctx, &r2, &m2, &c2) {
-                i += 1;
-                continue;
-            }
-            plan.push(node);
-            meet = m2;
-            cost = c2;
-            t += leg_t;
-            prev = node;
-            let last = remaining.len() - 1;
-            remaining[i] = remaining[last];
-            remaining.pop();
-        }
-        buckets.push(plan);
-    }
-    if !remaining.is_empty() {
-        if buckets.is_empty() {
-            buckets.push(Vec::new());
-        }
-        buckets.last_mut().unwrap().extend(remaining);
-    }
-    assemble(ctx, &buckets)
-}
-
-// ========================================================================= //
-// Crossover
-// ========================================================================= //
-
-fn giant_tour(ctx: &Ctx, ind: &Individual) -> Vec<usize> {
-    let active: Vec<usize> = (0..ind.plans.len())
-        .filter(|&i| ind.plans[i].nodes_indices.len() > 1)
-        .collect();
-    let order = match ctx.config.ordering {
-        HgsOrdering::Index => active,
-        HgsOrdering::Raan => order_by_raan(ctx, ind, active),
-        HgsOrdering::Nearest => order_by_nearest(ctx, ind, active),
-    };
-    let mut tour = Vec::new();
-    for idx in order {
-        tour.extend_from_slice(&ind.plans[idx].nodes_indices[1..]);
-    }
-    tour
-}
-
-fn order_by_raan(ctx: &Ctx, ind: &Individual, active: Vec<usize>) -> Vec<usize> {
-    let mut keyed: Vec<(f64, usize)> = active
-        .into_iter()
-        .map(|i| {
-            let seq = &ind.plans[i].nodes_indices;
-            let mean = seq[1..].iter().map(|&d| ctx.problem.catalog.r[d]).sum::<f64>()
-                / (seq.len() - 1) as f64;
-            (mean, i)
-        })
-        .collect();
-    keyed.sort_by(|a, b| fcmp(a.0, b.0));
-    keyed.into_iter().map(|(_, i)| i).collect()
-}
-
-fn order_by_nearest(ctx: &Ctx, ind: &Individual, active: Vec<usize>) -> Vec<usize> {
-    if active.len() <= 1 {
-        return active;
-    }
-    let first = |i: usize| ind.plans[i].nodes_indices[1];
-    let last = |i: usize| *ind.plans[i].nodes_indices.last().unwrap();
-    let cost = |i: usize, j: usize| orbital_distance(ctx.problem, ctx.transfer, ctx.config, i, j);
-
-    let mut remaining = active;
-    let start = remaining
-        .iter()
-        .copied()
-        .min_by(|&a, &b| fcmp(cost(ctx.depot, first(a)), cost(ctx.depot, first(b))))
-        .unwrap();
-    remaining.retain(|&i| i != start);
-    let mut order = vec![start];
-    while !remaining.is_empty() {
-        let tail = last(*order.last().unwrap());
-        let next = remaining
-            .iter()
-            .copied()
-            .min_by(|&a, &b| fcmp(cost(tail, first(a)), cost(tail, first(b))))
-            .unwrap();
-        remaining.retain(|&i| i != next);
-        order.push(next);
-    }
-    order
-}
-
-fn ox(p1: &[usize], p2: &[usize], rng: &mut SmallRng) -> Vec<usize> {
-    let n = p1.len();
-    if n < 2 {
-        return p1.to_vec();
-    }
-    let maxid = *p1.iter().max().unwrap();
-    let mut child = vec![0usize; n];
-    let mut added = vec![false; maxid + 1];
-    let start = rng.gen_range(0..n);
-    let mut end = rng.gen_range(0..n);
-    while end == start {
-        end = rng.gen_range(0..n);
-    }
-    let stop = (end + 1) % n;
-    let mut j = start;
-    loop {
-        let pos = j % n;
-        child[pos] = p1[pos];
-        added[p1[pos]] = true;
-        j += 1;
-        if j % n == stop {
-            break;
-        }
-    }
-    let mut pos = stop;
-    for t in 0..n {
-        let idx = p2[(stop + t) % n];
-        if idx < added.len() && !added[idx] {
-            child[pos] = idx;
-            added[idx] = true;
-            pos = (pos + 1) % n;
-        }
-    }
-    child
-}
-
-fn erx(p1: &[usize], p2: &[usize], rng: &mut SmallRng) -> Vec<usize> {
-    let n = p1.len();
-    if n < 2 {
-        return p1.to_vec();
-    }
-    let maxid = p1.iter().chain(p2.iter()).copied().max().unwrap();
-    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); maxid + 1];
-    for w in p1.windows(2).chain(p2.windows(2)) {
-        let (a, b) = (w[0], w[1]);
-        if !adj[a].contains(&b) {
-            adj[a].push(b);
-        }
-        if !adj[b].contains(&a) {
-            adj[b].push(a);
-        }
-    }
-
-    let mut visited = vec![false; maxid + 1];
-    let mut child = Vec::with_capacity(n);
-    let mut current = p1[0];
-    for _ in 0..n {
-        child.push(current);
-        visited[current] = true;
-        // Drop the visited node from its neighbours' lists.
-        let nbrs = std::mem::take(&mut adj[current]);
-        for &y in &nbrs {
-            adj[y].retain(|&z| z != current);
-        }
-        if child.len() == n {
-            break;
-        }
-        // Prefer a live neighbour with the fewest remaining neighbours; if the
-        // node is isolated, restart from a random unvisited node.
-        let live: Vec<usize> = nbrs.into_iter().filter(|&y| !visited[y]).collect();
-        current = if !live.is_empty() {
-            let min_deg = live.iter().map(|&y| adj[y].len()).min().unwrap();
-            let tied: Vec<usize> = live.into_iter().filter(|&y| adj[y].len() == min_deg).collect();
-            tied[rng.gen_range(0..tied.len())]
-        } else {
-            let rem: Vec<usize> = p1.iter().copied().filter(|&y| !visited[y]).collect();
-            rem[rng.gen_range(0..rem.len())]
+            &self.infeasible.individuals[chosen - nf]
         };
-    }
-    child
-}
-
-fn split(ctx: &Ctx, giant: &[usize], k_goal: usize) -> Vec<Vec<usize>> {
-    let n = giant.len();
-    let k = k_goal.max(1);
-    if n == 0 {
-        return Vec::new();
-    }
-    let inf = f64::INFINITY;
-    let mut memo = vec![vec![inf; n + 1]; k + 1];
-    let mut pred = vec![vec![0usize; n + 1]; k + 1];
-    memo[0][0] = 0.0;
-    let tf = ctx.config.threshold_factor;
-    let relax = if tf > 0.0 { 1.0 - 1.0 / tf } else { 0.0 };
-
-    for s in 1..=k {
-        for i in (s - 1)..n {
-            let base = memo[s - 1][i];
-            if base >= inf {
-                continue;
-            }
-            for j in i..n {
-                let plan = ctx.eval_debris(&giant[i..=j]);
-                let c = base + ctx.metric.plan_value(ctx.problem, &plan);
-                if c < memo[s][j + 1] {
-                    memo[s][j + 1] = c;
-                    pred[s][j + 1] = i;
-                }
-                // Relaxed agnostic pruning: stop extending once a constraint is
-                // violated past the relaxation factor.
-                let prune = ctx
-                    .constraints()
-                    .iter()
-                    .any(|con| con.violation(&plan) > relax * con.metric(&plan));
-                if prune {
-                    break;
-                }
-            }
-        }
+        Some(individual.clone())
     }
 
-    let mut best_k = k;
-    let mut best_c = memo[k][n];
-    #[allow(clippy::needless_range_loop)]
-    for s in 1..k {
-        if memo[s][n] < best_c {
-            best_c = memo[s][n];
-            best_k = s;
-        }
+    /// The cheapest feasible individual, or the cheapest one at all.
+    pub fn best(&self, metric: &Metric) -> Option<&Individual> {
+        self.feasible.best(metric).or_else(|| self.infeasible.best(metric))
     }
-    if best_c >= inf {
-        return vec![giant.to_vec()];
-    }
-
-    let mut bounds: Vec<(usize, usize)> = Vec::new();
-    let mut j = n;
-    for s in (1..=best_k).rev() {
-        let i = pred[s][j];
-        bounds.push((i, j));
-        j = i;
-    }
-    bounds.reverse();
-    bounds.iter().map(|&(a, b)| giant[a..b].to_vec()).collect()
-}
-
-fn debris_plans(ind: &Individual) -> Vec<Vec<usize>> {
-    ind.plans
-        .iter()
-        .filter(|r| r.nodes_indices.len() > 1)
-        .map(|r| r.nodes_indices[1..].to_vec())
-        .collect()
-}
-
-/// Greedily insert `d` at the cheapest feasible position over `plans`.
-fn cheapest_insert(ctx: &Ctx, plans: &mut [Vec<usize>], d: usize) {
-    let mut best: Option<(usize, usize, f64)> = None;
-    for (ri, plan) in plans.iter().enumerate() {
-        let base = ctx.metric.plan_value(ctx.problem, &ctx.eval_debris(plan));
-        for pos in 0..=plan.len() {
-            let mut cand = plan.clone();
-            cand.insert(pos, d);
-            let delta = ctx.metric.plan_value(ctx.problem, &ctx.eval_debris(&cand)) - base;
-            if best.is_none_or(|(_, _, b)| delta < b) {
-                best = Some((ri, pos, delta));
-            }
-        }
-    }
-    if let Some((ri, pos, _)) = best {
-        plans[ri].insert(pos, d);
-    } else if let Some(r) = plans.first_mut() {
-        r.push(d);
-    }
-}
-
-/// Selective plan exchange: keep most of `p1`, replace a contiguous block of
-/// its plans with one from `p2`, then repair duplicates and reinsert orphans.
-fn srex(ctx: &Ctx, p1: &Individual, p2: &Individual, rng: &mut SmallRng) -> Vec<Vec<usize>> {
-    let a = debris_plans(p1);
-    let b = debris_plans(p2);
-    if a.is_empty() {
-        return b;
-    }
-    if b.is_empty() {
-        return a;
-    }
-    let (na, nb) = (a.len(), b.len());
-    let num = 1 + rng.gen_range(0..na.min(nb));
-    let sa = rng.gen_range(0..na);
-    let sb = rng.gen_range(0..nb);
-
-    let mut removed = vec![false; na];
-    let mut injected = vec![false; ctx.problem.catalog.n];
-    let mut result: Vec<Vec<usize>> = Vec::new();
-    for t in 0..num {
-        removed[(sa + t) % na] = true;
-        let plan = &b[(sb + t) % nb];
-        for &d in plan {
-            injected[d] = true;
-        }
-        result.push(plan.clone());
-    }
-
-    let mut served = injected.clone();
-    for (i, plan) in a.iter().enumerate() {
-        if removed[i] {
-            continue;
-        }
-        let kept: Vec<usize> = plan.iter().copied().filter(|&d| !injected[d]).collect();
-        for &d in &kept {
-            served[d] = true;
-        }
-        result.push(kept);
-    }
-
-    let mut orphans: Vec<usize> = Vec::new();
-    for (i, plan) in a.iter().enumerate() {
-        if removed[i] {
-            for &d in plan {
-                if !served[d] {
-                    served[d] = true;
-                    orphans.push(d);
-                }
-            }
-        }
-    }
-
-    while result.len() < ctx.problem.num_chasers {
-        result.push(Vec::new());
-    }
-    for &d in &orphans {
-        cheapest_insert(ctx, &mut result, d);
-    }
-    result
-}
-
-fn crossover(ctx: &Ctx, rng: &mut SmallRng) -> Individual {
-    let p1 = ctx.population.pick(ctx.config, rng);
-    let p2 = ctx.population.pick(ctx.config, rng);
-    let buckets = match ctx.config.crossover {
-        HgsCrossover::Srex => srex(ctx, &p1, &p2, rng),
-        kind => {
-            let t1 = giant_tour(ctx, &p1);
-            let t2 = giant_tour(ctx, &p2);
-            let extra = if rng.gen::<f64>() < 0.1 { 1 } else { 0 };
-            let k_goal = (p1.active.max(1) + extra).min(ctx.problem.num_chasers);
-            let tour = match kind {
-                HgsCrossover::Erx => erx(&t1, &t2, rng),
-                _ => ox(&t1, &t2, rng),
-            };
-            split(ctx, &tour, k_goal)
-        }
-    };
-    assemble(ctx, &buckets)
 }
 
 // ========================================================================= //
 // Local search
 // ========================================================================= //
 
-fn rebuild_state(ind: &Individual, state_seq: &mut [usize], state_pos: &mut [usize]) {
-    for (s, plan) in ind.plans.iter().enumerate() {
-        for (p, &idx) in plan.nodes_indices.iter().enumerate() {
-            if p != 0 {
-                state_seq[idx] = s;
-                state_pos[idx] = p;
+/// Local search operator.
+pub struct Search<'a, S: ScheduleLayer> {
+    /// The state of the run, which also provides the random scan order.
+    context: &'a mut Context<S>,
+    /// The individual being improved, rewritten in place.
+    individual: &'a mut Individual,
+    /// The plan currently holding each debris.
+    holder: Vec<usize>,
+    /// The position of each debris in the plan holding it.
+    rank: Vec<usize>,
+    /// Reading of the clock when each debris was last examined.
+    tested: Vec<u64>,
+    /// Reading of the clock when each plan last changed.
+    touched: Vec<u64>,
+    /// Ticks once per accepted move, and orders the two records above.
+    clock: u64,
+}
+
+impl<'a, S: ScheduleLayer> Search<'a, S> {
+    /// Prepare the search on `individual`.
+    pub fn new(context: &'a mut Context<S>, individual: &'a mut Individual) -> Self {
+        let states = context.problem.states.len();
+        let plans = individual.plans.len();
+        let mut search = Self {
+            context,
+            individual,
+            holder: vec![0; states],
+            rank: vec![0; states],
+            tested: vec![0; states],
+            touched: vec![1; plans],
+            clock: 1,
+        };
+        for s in 0..plans {
+            search.register(s);
+        }
+        search
+    }
+
+    /// Record where each debris of one plan currently sits.
+    fn register(&mut self, s: usize) {
+        for (position, &node) in self.individual.plans[s].sequence.iter().enumerate() {
+            if position != 0 {
+                self.holder[node] = s;
+                self.rank[node] = position;
             }
         }
     }
-}
 
-/// Refresh the (plan, position) state of the nodes in plan `s` only. Any node
-/// that left `s` is re-registered when the plan it moved into is also refreshed.
-fn rebuild_plan(ind: &Individual, s: usize, state_seq: &mut [usize], state_pos: &mut [usize]) {
-    for (p, &idx) in ind.plans[s].nodes_indices.iter().enumerate() {
-        if p != 0 {
-            state_seq[idx] = s;
-            state_pos[idx] = p;
-        }
-    }
-}
-
-fn intra_relocate(ctx: &Ctx, ind: &mut Individual, s: usize, pos: usize) -> bool {
-    let seq = ind.plans[s].nodes_indices.clone();
-    let length = seq.len();
-    if length < 3 || pos == 0 || pos >= length {
-        return false;
-    }
-    let base = ctx.metric.plan_value(ctx.problem, &ind.plans[s]);
-    let state = seq[pos];
-    for insert_at in 1..length {
-        if insert_at == pos {
-            continue;
-        }
-        let mut cand = seq.clone();
-        cand.remove(pos);
-        cand.insert(insert_at, state);
-        if ctx.lb(&cand) >= base {
-            continue;
-        }
-        let mo = ctx.eval(&cand);
-        if ctx.metric.plan_value(ctx.problem, &mo) < base {
-            ind.plans[s] = mo;
-            return true;
-        }
-    }
-    false
-}
-
-fn intra_swap(ctx: &Ctx, ind: &mut Individual, s: usize, pos: usize) -> bool {
-    let seq = ind.plans[s].nodes_indices.clone();
-    let length = seq.len();
-    if length < 3 || pos == 0 || pos >= length {
-        return false;
-    }
-    let base = ctx.metric.plan_value(ctx.problem, &ind.plans[s]);
-    for t in (pos + 1)..length {
-        let mut cand = seq.clone();
-        cand.swap(pos, t);
-        if ctx.lb(&cand) >= base {
-            continue;
-        }
-        let mo = ctx.eval(&cand);
-        if ctx.metric.plan_value(ctx.problem, &mo) < base {
-            ind.plans[s] = mo;
-            return true;
-        }
-    }
-    false
-}
-
-fn two_opt(ctx: &Ctx, ind: &mut Individual, s: usize, pos: usize) -> bool {
-    let seq = ind.plans[s].nodes_indices.clone();
-    let length = seq.len();
-    if length < 3 || pos == 0 || pos >= length - 1 {
-        return false;
-    }
-    let base = ctx.metric.plan_value(ctx.problem, &ind.plans[s]);
-    for end in (pos + 1)..length {
-        let mut cand = seq.clone();
-        cand[pos..=end].reverse();
-        if ctx.lb(&cand) >= base {
-            continue;
-        }
-        let mo = ctx.eval(&cand);
-        if ctx.metric.plan_value(ctx.problem, &mo) < base {
-            ind.plans[s] = mo;
-            return true;
-        }
-    }
-    false
-}
-
-fn inter_relocate(
-    ctx: &Ctx,
-    ind: &mut Individual,
-    s1: usize,
-    pos1: usize,
-    s2: usize,
-    pos2: usize,
-) -> bool {
-    if s1 == s2 {
-        return false;
-    }
-    let seq1 = ind.plans[s1].nodes_indices.clone();
-    let seq2 = ind.plans[s2].nodes_indices.clone();
-    let (len1, len2) = (seq1.len(), seq2.len());
-    if pos1 == 0 || pos1 >= len1 || pos2 == 0 || pos2 > len2 {
-        return false;
-    }
-    let old = ctx.metric.plan_value(ctx.problem, &ind.plans[s1])
-        + ctx.metric.plan_value(ctx.problem, &ind.plans[s2]);
-    let u = seq1[pos1];
-
-    // Move u from s1 into s2.
-    let mut new1 = seq1.clone();
-    new1.remove(pos1);
-    let mut new2 = seq2.clone();
-    new2.insert(pos2.min(new2.len()), u);
-    if ctx.lb(&new1) + ctx.lb(&new2) < old {
-        let mo1 = ctx.eval(&new1);
-        let mo2 = ctx.eval(&new2);
-        if ctx.metric.plan_value(ctx.problem, &mo1) + ctx.metric.plan_value(ctx.problem, &mo2) < old {
-            ind.plans[s1] = mo1;
-            ind.plans[s2] = mo2;
-            return true;
-        }
+    /// Lower bound on the cost of a candidate chaser sequence.
+    fn bound(&self, sequence: &[usize]) -> f64 {
+        self.context.schedule.evaluate_lb(sequence)
     }
 
-    // Swap u with the node at pos2.
-    if pos2 < len2 {
-        let w = seq2[pos2];
-        let mut n1 = seq1.clone();
-        n1[pos1] = w;
-        let mut n2 = seq2.clone();
-        n2[pos2] = u;
-        if ctx.lb(&n1) + ctx.lb(&n2) < old {
-            let mo1 = ctx.eval(&n1);
-            let mo2 = ctx.eval(&n2);
-            if ctx.metric.plan_value(ctx.problem, &mo1) + ctx.metric.plan_value(ctx.problem, &mo2) < old {
-                ind.plans[s1] = mo1;
-                ind.plans[s2] = mo2;
+    /// Screen a candidate move on the bound, then price it for real.
+    fn accept(&mut self, slots: &[usize], candidates: &[Vec<usize>], base: f64) -> bool {
+        // The bound costs a table lookup; the schedule costs a dynamic program.
+        if candidates.iter().map(|c| self.bound(c)).sum::<f64>() >= base {
+            return false;
+        }
+        let plans: Vec<_> = candidates
+            .iter()
+            .map(|c| self.context.schedule.evaluate(c))
+            .collect();
+        if plans.iter().map(|p| self.context.value(p)).sum::<f64>() >= base {
+            return false;
+        }
+        for (&slot, plan) in slots.iter().zip(plans) {
+            self.individual.plans[slot] = plan;
+        }
+        true
+    }
+
+    // ------------------------- Intra-plan moves ------------------------- //
+
+    /// Move one debris elsewhere in its own plan.
+    fn intra_relocate(&mut self, s: usize, pos: usize) -> bool {
+        let seq = self.individual.plans[s].sequence.clone();
+        let n = seq.len();
+        if n < 3 || pos == 0 || pos >= n {
+            return false;
+        }
+        let base = self.context.value(&self.individual.plans[s]);
+        let node = seq[pos];
+        let mut rest = seq.clone();
+        rest.remove(pos);
+
+        for insert_at in 1..n {
+            if insert_at == pos {
+                continue;
+            }
+            let mut candidate = rest.clone();
+            candidate.insert(insert_at, node);
+            if self.accept(&[s], &[candidate], base) {
                 return true;
             }
         }
-    }
-
-    false
-}
-
-fn two_opt_star(
-    ctx: &Ctx,
-    ind: &mut Individual,
-    s1: usize,
-    pos1: usize,
-    s2: usize,
-    pos2: usize,
-) -> bool {
-    if s1 == s2 {
-        return false;
-    }
-    let seq1 = ind.plans[s1].nodes_indices.clone();
-    let seq2 = ind.plans[s2].nodes_indices.clone();
-    let (len1, len2) = (seq1.len(), seq2.len());
-    if pos1 == 0 || pos1 > len1 || pos2 == 0 || pos2 > len2 {
-        return false;
-    }
-    let old = ctx.metric.plan_value(ctx.problem, &ind.plans[s1])
-        + ctx.metric.plan_value(ctx.problem, &ind.plans[s2]);
-    let mut new1 = seq1[..pos1].to_vec();
-    new1.extend_from_slice(&seq2[pos2..len2]);
-    let mut new2 = seq2[..pos2].to_vec();
-    new2.extend_from_slice(&seq1[pos1..len1]);
-    if ctx.lb(&new1) + ctx.lb(&new2) >= old {
-        return false;
-    }
-    let mo1 = ctx.eval(&new1);
-    let mo2 = ctx.eval(&new2);
-    if ctx.metric.plan_value(ctx.problem, &mo1) + ctx.metric.plan_value(ctx.problem, &mo2) < old {
-        ind.plans[s1] = mo1;
-        ind.plans[s2] = mo2;
-        true
-    } else {
         false
     }
+
+    /// Exchange two debris within the same plan.
+    fn intra_swap(&mut self, s: usize, pos: usize) -> bool {
+        let seq = self.individual.plans[s].sequence.clone();
+        let n = seq.len();
+        if n < 3 || pos == 0 || pos >= n {
+            return false;
+        }
+        let base = self.context.value(&self.individual.plans[s]);
+        for other in (pos + 1)..n {
+            let mut candidate = seq.clone();
+            candidate.swap(pos, other);
+            if self.accept(&[s], &[candidate], base) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Reverse a segment of a plan.
+    fn two_opt(&mut self, s: usize, pos: usize) -> bool {
+        let seq = self.individual.plans[s].sequence.clone();
+        let n = seq.len();
+        if n < 3 || pos == 0 || pos >= n - 1 {
+            return false;
+        }
+        let base = self.context.value(&self.individual.plans[s]);
+        for end in (pos + 1)..n {
+            let mut candidate = seq.clone();
+            candidate[pos..=end].reverse();
+            if self.accept(&[s], &[candidate], base) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // ------------------------- Inter-plan moves ------------------------- //
+
+    /// Hand one debris over to another chaser, or trade two of them.
+    fn inter_relocate(&mut self, s1: usize, pos1: usize, s2: usize, pos2: usize) -> bool {
+        if s1 == s2 {
+            return false;
+        }
+        let seq1 = self.individual.plans[s1].sequence.clone();
+        let seq2 = self.individual.plans[s2].sequence.clone();
+        let (n1, n2) = (seq1.len(), seq2.len());
+        if pos1 == 0 || pos1 >= n1 || pos2 == 0 || pos2 > n2 {
+            return false;
+        }
+        let base = self.context.value(&self.individual.plans[s1])
+            + self.context.value(&self.individual.plans[s2]);
+        let node = seq1[pos1];
+
+        let mut moved1 = seq1.clone();
+        moved1.remove(pos1);
+        let mut moved2 = seq2.clone();
+        moved2.insert(pos2.min(n2), node);
+        if self.accept(&[s1, s2], &[moved1, moved2], base) {
+            return true;
+        }
+
+        if pos2 < n2 {
+            let mut traded1 = seq1.clone();
+            let mut traded2 = seq2.clone();
+            traded1[pos1] = seq2[pos2];
+            traded2[pos2] = node;
+            if self.accept(&[s1, s2], &[traded1, traded2], base) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Exchange the tails of two plans.
+    fn two_opt_star(&mut self, s1: usize, pos1: usize, s2: usize, pos2: usize) -> bool {
+        if s1 == s2 {
+            return false;
+        }
+        let seq1 = self.individual.plans[s1].sequence.clone();
+        let seq2 = self.individual.plans[s2].sequence.clone();
+        if pos1 == 0 || pos1 > seq1.len() || pos2 == 0 || pos2 > seq2.len() {
+            return false;
+        }
+        let base = self.context.value(&self.individual.plans[s1])
+            + self.context.value(&self.individual.plans[s2]);
+        let candidate1: Vec<usize> = seq1[..pos1].iter().chain(&seq2[pos2..]).copied().collect();
+        let candidate2: Vec<usize> = seq2[..pos2].iter().chain(&seq1[pos1..]).copied().collect();
+        self.accept(&[s1, s2], &[candidate1, candidate2], base)
+    }
+
+    // ---------------------- Local-search execution ---------------------- //
+
+    /// Local search run.
+    pub fn run(mut self) {
+        let mut sweep = 0usize;
+        let mut improved = true;
+        while improved {
+            improved = false;
+            sweep += 1;
+            let mut order = self.context.debris.clone();
+            order.shuffle(&mut self.context.rng);
+
+            for u in order {
+                let last_tested = self.tested[u];
+                self.tested[u] = self.clock;
+
+                // Offer u to each of its neighbors, from a random entry point.
+                let peers = self.context.neighbors[u].len();
+                let mut done = false;
+                if peers > 0 {
+                    let start = self.context.rng.random_range(0..peers);
+                    for offset in 0..peers {
+                        let v = self.context.neighbors[u][(start + offset) % peers];
+                        let (su, sv) = (self.holder[u], self.holder[v]);
+                        if su == sv {
+                            continue;
+                        }
+                        if self.touched[su].max(self.touched[sv]) <= last_tested {
+                            continue;
+                        }
+                        let (pu, pv) = (self.rank[u], self.rank[v]);
+                        if self.inter_relocate(su, pu, sv, pv + 1)
+                            || (pu == 1 && self.inter_relocate(sv, pv, su, pu))
+                            || self.two_opt_star(su, pu, sv, pv + 1)
+                        {
+                            self.clock += 1;
+                            self.touched[su] = self.clock;
+                            self.touched[sv] = self.clock;
+                            self.register(su);
+                            self.register(sv);
+                            improved = true;
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+                if done {
+                    continue;
+                }
+
+                // Once the plans have settled, try waking an idle chaser up.
+                if sweep > 1 {
+                    let idle = self
+                        .individual
+                        .plans
+                        .iter()
+                        .position(|p| p.sequence.len() <= 1);
+                    let (su, pu) = (self.holder[u], self.rank[u]);
+                    if let Some(idle) = idle {
+                        if idle != su
+                            && (self.two_opt_star(su, pu, idle, 1)
+                                || self.inter_relocate(su, pu, idle, 1))
+                        {
+                            self.clock += 1;
+                            self.touched[su] = self.clock;
+                            self.touched[idle] = self.clock;
+                            self.register(su);
+                            self.register(idle);
+                            improved = true;
+                            continue;
+                        }
+                    }
+                }
+
+                // Rearrange u's own plan, but only if that plan has moved on.
+                if self.touched[self.holder[u]] > last_tested {
+                    for move_index in 0..3 {
+                        let (su, pu) = (self.holder[u], self.rank[u]);
+                        let applied = match move_index {
+                            0 => self.intra_relocate(su, pu),
+                            1 => self.intra_swap(su, pu),
+                            _ => self.two_opt(su, pu),
+                        };
+                        if applied {
+                            self.clock += 1;
+                            self.touched[su] = self.clock;
+                            self.register(su);
+                            improved = true;
+                        }
+                    }
+                }
+            }
+        }
+        self.individual.refresh(&self.context.problem);
+    }
 }
 
-fn improve(ind: &mut Individual, ctx: &Ctx, rng: &mut SmallRng) {
-    let mut state_seq = vec![0usize; ctx.problem.catalog.n];
-    let mut state_pos = vec![0usize; ctx.problem.catalog.n];
-    let mut when_tested = vec![0u64; ctx.problem.catalog.n];
-    let mut when_modified = vec![1u64; ind.plans.len()];
-    let mut num_moves = 1u64;
-    rebuild_state(ind, &mut state_seq, &mut state_pos);
+// ========================================================================= //
+// Context
+// ========================================================================= //
 
-    let mut improved = true;
-    let mut loop_num = 0u64;
-    while improved {
-        improved = false;
-        loop_num += 1;
-        let mut clients = ctx.debris.clone();
-        clients.shuffle(rng);
-        for &u in &clients {
-            let last_tested = when_tested[u];
-            when_tested[u] = num_moves;
-            let su = state_seq[u];
-            let pu = state_pos[u];
+/// Context manager for hybrid genetic search.
+pub struct Context<S: ScheduleLayer> {
+    /// The instance being solved.
+    pub problem: Rc<Problem>,
+    /// The layer pricing a chaser plan along a fixed sequence.
+    pub schedule: S,
+    /// The parameters of the run.
+    pub config: HgsConfig,
+    /// The random source, seeded from the configuration.
+    pub rng: SmallRng,
+    /// Indices of the debris to collect.
+    pub debris: Vec<usize>,
+    /// The penalized objective.
+    pub metric: Metric,
+    /// The individuals currently held.
+    pub population: Population,
+    /// For each debris, its `nb_neighbors` closest peers.
+    pub neighbors: Vec<Vec<usize>>,
+    /// Start time
+    pub start_time: Instant,
+    /// Number of iterations
+    pub iteration: usize,
+    /// Number of iterations without improvement
+    pub stalled: usize,
+}
 
-            // Inter-plan moves over u's neighbours.
-            let mut did = false;
-            let len_n = ctx.neighbors[u].len();
-            if len_n > 0 {
-                let start = rng.gen_range(0..len_n);
-                for off in 0..len_n {
-                    let v = ctx.neighbors[u][(start + off) % len_n];
-                    let sv = state_seq[v];
-                    if su == sv {
-                        continue;
+impl<S: ScheduleLayer> Context<S> {
+    /// Prepare a run over `problem`.
+    pub fn new(problem: Rc<Problem>, schedule: S, config: HgsConfig) -> Self {
+        let debris: Vec<usize> = problem.debris().collect();
+        let metric = Metric::new(&problem, &schedule, config);
+        Self {
+            problem,
+            schedule,
+            config,
+            rng: SmallRng::seed_from_u64(config.seed),
+            debris,
+            metric,
+            population: Population::new(config),
+            neighbors: Vec::new(),
+            start_time: Instant::now(),
+            iteration: 0,
+            stalled: 0,
+        }
+    }
+
+    // ------------------------------ Helpers ----------------------------- //
+
+    /// Schedule a chaser over `bucket`, starting from the departure orbit.
+    pub fn plan(&self, bucket: &[usize]) -> Rc<ChaserPlan> {
+        let mut sequence = Vec::with_capacity(bucket.len() + 1);
+        sequence.push(DEPOT);
+        sequence.extend_from_slice(bucket);
+        self.schedule.evaluate(&sequence)
+    }
+
+    /// Penalized cost of a chaser plan.
+    pub fn value(&self, plan: &ChaserPlan) -> f64 {
+        self.metric.plan_value(&self.problem, plan)
+    }
+
+    /// The cheapest the transfer from `i` to `j` can ever be.
+    pub fn proximity(&self, i: usize, j: usize) -> f64 {
+        self.schedule.evaluate_lb(&[i, j])
+    }
+
+    /// Turn debris buckets into a mission plan, one bucket per chaser.
+    pub fn assemble(&self, buckets: &[Vec<usize>]) -> Individual {
+        assert!(
+            buckets.len() <= self.problem.num_chasers,
+            "{} buckets for {} chasers",
+            buckets.len(),
+            self.problem.num_chasers
+        );
+        let empty: Vec<usize> = Vec::new();
+        let plans = (0..self.problem.num_chasers)
+            .map(|c| self.plan(buckets.get(c).unwrap_or(&empty)))
+            .collect();
+        Individual::new(&self.problem, plans)
+    }
+
+    /// Improve an individual by local search, until no move helps.
+    pub fn improve(&mut self, individual: &mut Individual) {
+        Search::new(self, individual).run();
+    }
+
+    /// Insert an individual into the population, retuning the penalties.
+    pub fn insert(&mut self, individual: Individual) {
+        let old = self.best_value();
+        self.population.add(&self.debris, &mut self.metric, individual);
+        let new = self.best_value();
+        if new < old { self.stalled = 0; } else { self.stalled += 1; }
+        self.iteration += 1;
+    }
+
+    /// The cheapest individual held, feasible if any is.
+    pub fn best(&self) -> Option<&Individual> {
+        self.population.best(&self.metric)
+    }
+
+    /// Penalized cost of the incumbent, infinite while none exists.
+    pub fn best_value(&self) -> f64 {
+        self.best()
+            .map(|individual| self.metric.value(individual))
+            .unwrap_or(f64::INFINITY)
+    }
+
+    /// Whether the run should stop
+    pub fn terminate(&self) -> bool {
+        self.iteration >= self.config.max_iter
+            || self.stalled >= self.config.max_nimp
+            || self.start_time.elapsed().as_secs_f64() >= self.config.max_time
+    }
+
+    // ---------------------------- Generation ---------------------------- //
+
+    /// Build one initial individual, by whichever strategy is configured.
+    pub fn generate(&mut self) -> Individual {
+        match self.config.generation {
+            Generation::Random => self.generate_random(),
+            Generation::Greedy => self.generate_greedy(),
+        }
+    }
+
+    /// Grow each chaser plan by repeatedly appending the cheapest debris.
+    pub fn generate_greedy(&mut self) -> Individual {
+        let mut available = vec![false; self.problem.states.len()];
+        for &d in &self.debris {
+            available[d] = true;
+        }
+
+        // Debris ordered by how cheaply the swarm reaches them, then shuffled
+        // within a short window so repeated calls seed different plans.
+        let mut ordered = self.debris.clone();
+        ordered.sort_by(|&a, &b| {
+            self.proximity(DEPOT, a)
+                .total_cmp(&self.proximity(DEPOT, b))
+        });
+        self.window_shuffle(&mut ordered, 4);
+
+        let mut buckets: Vec<Vec<usize>> = Vec::new();
+        for start in ordered {
+            if !available[start] || buckets.len() >= self.problem.num_chasers {
+                continue;
+            }
+            available[start] = false;
+            let mut bucket = vec![start];
+            while let Some(next) = self.cheapest_extension(&bucket, &available) {
+                available[next] = false;
+                bucket.push(next);
+            }
+            buckets.push(bucket);
+        }
+
+        let leftovers: Vec<usize> = self
+            .debris
+            .iter()
+            .copied()
+            .filter(|&d| available[d])
+            .collect();
+        Self::place_leftovers(&mut buckets, &leftovers);
+        self.assemble(&buckets)
+    }
+
+    /// Fill each chaser plan with random debris while it stays feasible.
+    pub fn generate_random(&mut self) -> Individual {
+        let mut remaining = self.debris.clone();
+        remaining.shuffle(&mut self.rng);
+
+        let mut buckets: Vec<Vec<usize>> = Vec::new();
+        while !remaining.is_empty() && buckets.len() < self.problem.num_chasers {
+            let mut bucket: Vec<usize> = Vec::new();
+            let mut rejected: Vec<usize> = Vec::new();
+            while let Some(candidate) = remaining.pop() {
+                bucket.push(candidate);
+                if !self.admissible(&bucket) {
+                    bucket.pop();
+                    rejected.push(candidate);
+                }
+            }
+            remaining = rejected;
+            if bucket.is_empty() {
+                break; // nothing fits anywhere; stop rather than spin
+            }
+            buckets.push(bucket);
+        }
+
+        Self::place_leftovers(&mut buckets, &remaining);
+        self.assemble(&buckets)
+    }
+
+    /// Perturb an ordering locally, keeping its overall structure.
+    fn window_shuffle(&mut self, order: &mut [usize], width: usize) {
+        let n = order.len();
+        for i in 0..n.saturating_sub(1) {
+            let end = (i + width).min(n - 1);
+            let j = i + self.rng.random_range(0..=end - i);
+            order.swap(i, j);
+        }
+    }
+
+    /// Whether a chaser can fly this bucket within the operational limits.
+    fn admissible(&self, bucket: &[usize]) -> bool {
+        bucket.len() <= self.problem.max_load
+            && self.problem.is_plan_feasible(&self.plan(bucket))
+    }
+
+    /// The cheapest debris that can still be appended to `bucket`.
+    fn cheapest_extension(&self, bucket: &[usize], available: &[bool]) -> Option<usize> {
+        if bucket.len() >= self.problem.max_load {
+            return None;
+        }
+        let current = *bucket.last()?;
+        let mut candidates: Vec<usize> = self
+            .debris
+            .iter()
+            .copied()
+            .filter(|&d| available[d])
+            .collect();
+        candidates.sort_by(|&a, &b| {
+            self.proximity(current, a)
+                .total_cmp(&self.proximity(current, b))
+        });
+
+        let mut trial = bucket.to_vec();
+        for candidate in candidates {
+            trial.push(candidate);
+            if self.admissible(&trial) {
+                return Some(candidate);
+            }
+            trial.pop();
+        }
+        None
+    }
+
+    /// Append the debris no plan could take, so that none is ever dropped.
+    fn place_leftovers(buckets: &mut Vec<Vec<usize>>, leftovers: &[usize]) {
+        if leftovers.is_empty() {
+            return;
+        }
+        let mut sorted = leftovers.to_vec();
+        sorted.sort_unstable();
+        if buckets.is_empty() {
+            buckets.push(Vec::new());
+        }
+        buckets.last_mut().expect("just ensured non-empty").extend(sorted);
+    }
+
+    // ---------------------------- Crossover ----------------------------- //
+
+    /// Concatenate the chaser plans into a single permutation of the debris.
+    pub fn giant_tour(&self, individual: &Individual) -> Vec<usize> {
+        let active: Vec<Rc<ChaserPlan>> = individual
+            .plans
+            .iter()
+            .filter(|p| p.load() > 0)
+            .cloned()
+            .collect();
+        let ordered = match self.config.ordering {
+            Ordering::Raan => self.order_by_raan(active),
+            Ordering::Nearest => self.order_by_nearest(active),
+            Ordering::Index => active,
+        };
+        ordered
+            .iter()
+            .flat_map(|p| p.sequence[1..].iter().copied())
+            .collect()
+    }
+
+    /// Order the plans by the circular mean RAAN of the debris they visit.
+    fn order_by_raan(&self, mut plans: Vec<Rc<ChaserPlan>>) -> Vec<Rc<ChaserPlan>> {
+        plans.sort_by(|a, b| self.mean_raan(a).total_cmp(&self.mean_raan(b)));
+        plans
+    }
+
+    /// Circular mean of the RAAN of a plan's debris, at their visiting times.
+    fn mean_raan(&self, plan: &ChaserPlan) -> f64 {
+        let states = &self.problem.states;
+        let (mut sin, mut cos, mut any) = (0.0, 0.0, false);
+        for (&d, &t) in plan.sequence[1..].iter().zip(&plan.depart[1..]) {
+            let angle = states[d].r + states[d].dr_ * t;
+            sin += angle.sin();
+            cos += angle.cos();
+            any = true;
+        }
+        if !any {
+            return 0.0;
+        }
+        let mean = sin.atan2(cos);
+        if mean < 0.0 {
+            mean + TAU
+        } else {
+            mean
+        }
+    }
+
+    /// Chain the plans greedily, each following the one it is cheapest to reach.
+    fn order_by_nearest(&self, plans: Vec<Rc<ChaserPlan>>) -> Vec<Rc<ChaserPlan>> {
+        if plans.len() <= 1 {
+            return plans;
+        }
+        let head_of = |i: usize| plans[i].sequence[1];
+        let mut pending: Vec<usize> = (0..plans.len()).collect();
+
+        let first = *pending
+            .iter()
+            .min_by(|&&a, &&b| {
+                self.proximity(DEPOT, head_of(a))
+                    .total_cmp(&self.proximity(DEPOT, head_of(b)))
+            })
+            .expect("pending is non-empty");
+        pending.retain(|&i| i != first);
+
+        let mut order = vec![first];
+        while !pending.is_empty() {
+            let tail = *plans[*order.last().expect("non-empty")]
+                .sequence
+                .last()
+                .expect("a plan always visits the depot");
+            let next = *pending
+                .iter()
+                .min_by(|&&a, &&b| {
+                    self.proximity(tail, head_of(a))
+                        .total_cmp(&self.proximity(tail, head_of(b)))
+                })
+                .expect("pending is non-empty");
+            pending.retain(|&i| i != next);
+            order.push(next);
+        }
+        order.into_iter().map(|i| Rc::clone(&plans[i])).collect()
+    }
+
+    /// Recombine two parents drawn from the population into a child.
+    pub fn crossover(&mut self) -> Individual {
+        let (first, second) = match (
+            self.population.pick(&mut self.rng),
+            self.population.pick(&mut self.rng),
+        ) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return self.generate(),
+        };
+
+        if self.config.crossover == Crossover::Srex {
+            let buckets = self.srex(&first, &second);
+            return self.assemble(&buckets);
+        }
+
+        let tour_a = self.giant_tour(&first);
+        let tour_b = self.giant_tour(&second);
+        if tour_a.is_empty() {
+            let buckets = self.srex(&first, &second);
+            return self.assemble(&buckets);
+        }
+
+        let child = match self.config.crossover {
+            Crossover::Erx => self.erx(&tour_a, &tour_b),
+            _ => self.ox(&tour_a, &tour_b),
+        };
+
+        // Occasionally allow one more chaser than the parent used, so that the
+        // number of active chasers can grow as well as shrink.
+        let extra = usize::from(self.rng.random::<f64>() < 0.1);
+        let goal = (first.active.max(1) + extra).min(self.problem.num_chasers);
+        let buckets = self.split(&child, goal);
+        self.assemble(&buckets)
+    }
+
+    /// Order crossover: keep a block of the first parent, fill from the second.
+    pub fn ox(&mut self, first: &[usize], second: &[usize]) -> Vec<usize> {
+        let n = first.len();
+        if n < 2 {
+            return first.to_vec();
+        }
+        let start = self.rng.random_range(0..n);
+        let mut end = self.rng.random_range(0..n);
+        while end == start {
+            end = self.rng.random_range(0..n);
+        }
+
+        let mut child = vec![usize::MAX; n];
+        let mut taken = vec![false; self.problem.states.len()];
+        let mut i = start;
+        loop {
+            child[i] = first[i];
+            taken[first[i]] = true;
+            if i == end {
+                break;
+            }
+            i = (i + 1) % n;
+        }
+
+        // The second parent is read from a fixed offset while the write cursor
+        // advances independently, so every position the block left free is
+        // filled exactly once. Coupling the two skips positions and returns a
+        // child shorter than its parents.
+        let stop = (end + 1) % n;
+        let mut pos = stop;
+        for offset in 0..n {
+            let debris = second[(stop + offset) % n];
+            if !taken[debris] {
+                child[pos] = debris;
+                taken[debris] = true;
+                pos = (pos + 1) % n;
+            }
+        }
+        child
+    }
+
+    /// Edge recombination: prefer successions both parents agree on.
+    pub fn erx(&mut self, first: &[usize], second: &[usize]) -> Vec<usize> {
+        let n = first.len();
+        if n < 2 {
+            return first.to_vec();
+        }
+        // Sorted sets, so the tie-break depends on the seed alone and never on
+        // an iteration order.
+        let mut adjacency: Vec<BTreeSet<usize>> =
+            vec![BTreeSet::new(); self.problem.states.len()];
+        for tour in [first, second] {
+            for pair in tour.windows(2) {
+                adjacency[pair[0]].insert(pair[1]);
+                adjacency[pair[1]].insert(pair[0]);
+            }
+        }
+
+        let mut child: Vec<usize> = Vec::with_capacity(n);
+        let mut visited = vec![false; self.problem.states.len()];
+        let mut current = first[0];
+
+        while child.len() < n {
+            child.push(current);
+            visited[current] = true;
+            let peers: Vec<usize> = adjacency[current].iter().copied().collect();
+            for peer in &peers {
+                adjacency[*peer].remove(&current);
+            }
+            let live: Vec<usize> = peers.into_iter().filter(|&d| !visited[d]).collect();
+            adjacency[current].clear();
+            if child.len() == n {
+                break;
+            }
+            current = if !live.is_empty() {
+                let fewest = live
+                    .iter()
+                    .map(|&d| adjacency[d].len())
+                    .min()
+                    .expect("live is non-empty");
+                let tied: Vec<usize> = live
+                    .into_iter()
+                    .filter(|&d| adjacency[d].len() == fewest)
+                    .collect();
+                *tied.choose(&mut self.rng).expect("tied is non-empty")
+            } else {
+                let free: Vec<usize> = first.iter().copied().filter(|&d| !visited[d]).collect();
+                match free.choose(&mut self.rng) {
+                    Some(&d) => d,
+                    None => break,
+                }
+            };
+        }
+        child
+    }
+
+    /// Replace a block of the first parent's plans by plans of the second.
+    pub fn srex(&mut self, first: &Individual, second: &Individual) -> Vec<Vec<usize>> {
+        let active = |ind: &Individual| -> Vec<Vec<usize>> {
+            ind.plans
+                .iter()
+                .filter(|p| p.load() > 0)
+                .map(|p| p.sequence[1..].to_vec())
+                .collect()
+        };
+        let left = active(first);
+        let right = active(second);
+        if left.is_empty() {
+            return right;
+        }
+        if right.is_empty() {
+            return left;
+        }
+
+        let count = 1 + self.rng.random_range(0..left.len().min(right.len()));
+        let start_left = self.rng.random_range(0..left.len());
+        let start_right = self.rng.random_range(0..right.len());
+
+        let n_states = self.problem.states.len();
+        let mut removed = vec![false; left.len()];
+        let mut injected = vec![false; n_states];
+        let mut buckets: Vec<Vec<usize>> = Vec::new();
+
+        for t in 0..count {
+            removed[(start_left + t) % left.len()] = true;
+            let donor = &right[(start_right + t) % right.len()];
+            for &d in donor {
+                injected[d] = true;
+            }
+            buckets.push(donor.clone());
+        }
+
+        let mut served = injected.clone();
+        for (i, bucket) in left.iter().enumerate() {
+            if removed[i] {
+                continue;
+            }
+            let kept: Vec<usize> = bucket.iter().copied().filter(|&d| !injected[d]).collect();
+            for &d in &kept {
+                served[d] = true;
+            }
+            buckets.push(kept);
+        }
+
+        let mut orphans: Vec<usize> = Vec::new();
+        for i in 0..left.len() {
+            if !removed[i] {
+                continue;
+            }
+            for &d in &left[i] {
+                if !served[d] {
+                    served[d] = true;
+                    orphans.push(d);
+                }
+            }
+        }
+        while buckets.len() < self.problem.num_chasers {
+            buckets.push(Vec::new());
+        }
+        for debris in orphans {
+            self.cheapest_insert(&mut buckets, debris);
+        }
+        buckets
+    }
+
+    /// Split a giant tour into individual chaser plans.
+    pub fn split(&self, tour: &[usize], goal: usize) -> Vec<Vec<usize>> {
+        let n = tour.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let k = goal.max(1);
+        let factor = self.config.threshold_factor;
+
+        let mut memo = vec![vec![f64::INFINITY; n + 1]; k + 1];
+        let mut pred = vec![vec![0usize; n + 1]; k + 1];
+        memo[0][0] = 0.0;
+
+        for s in 1..=k {
+            for i in (s - 1)..n {
+                let base = memo[s - 1][i];
+                if !base.is_finite() {
+                    continue;
+                }
+                for j in i..n {
+                    let plan = self.plan(&tour[i..=j]);
+                    let candidate = base + self.value(&plan);
+                    if candidate < memo[s][j + 1] {
+                        memo[s][j + 1] = candidate;
+                        pred[s][j + 1] = i;
                     }
-                    // Skip if neither touched plan changed since last test.
-                    if when_modified[su].max(when_modified[sv]) <= last_tested {
-                        continue;
-                    }
-                    let pv = state_pos[v];
-                    if inter_relocate(ctx, ind, su, pu, sv, pv + 1)
-                        || (pu == 1 && inter_relocate(ctx, ind, sv, pv, su, pu))
-                        || two_opt_star(ctx, ind, su, pu, sv, pv + 1)
+                    if plan.load() as f64 > factor * self.problem.max_load as f64
+                        || plan.time() > factor * self.problem.max_time
                     {
-                        num_moves += 1;
-                        when_modified[su] = num_moves;
-                        when_modified[sv] = num_moves;
-                        rebuild_plan(ind, su, &mut state_seq, &mut state_pos);
-                        rebuild_plan(ind, sv, &mut state_seq, &mut state_pos);
-                        improved = true;
-                        did = true;
                         break;
                     }
                 }
             }
-            if did {
-                continue;
-            }
+        }
 
-            // Empty-plan moves (after the first sweep).
-            let su = state_seq[u];
-            let pu = state_pos[u];
-            if loop_num > 1 {
-                if let Some(empty_s) = ind.plans.iter().position(|r| r.nodes_indices.len() <= 1) {
-                    if empty_s != su
-                        && (two_opt_star(ctx, ind, su, pu, empty_s, 1)
-                            || inter_relocate(ctx, ind, su, pu, empty_s, 1))
-                    {
-                        num_moves += 1;
-                        when_modified[su] = num_moves;
-                        when_modified[empty_s] = num_moves;
-                        rebuild_plan(ind, su, &mut state_seq, &mut state_pos);
-                        rebuild_plan(ind, empty_s, &mut state_seq, &mut state_pos);
-                        improved = true;
-                        continue;
-                    }
-                }
-            }
+        let best_k = (1..=k)
+            .min_by(|&a, &b| memo[a][n].total_cmp(&memo[b][n]))
+            .expect("k is at least one");
+        if !memo[best_k][n].is_finite() {
+            return vec![tour.to_vec()];
+        }
 
-            // Intra-plan moves (only if u's plan changed since last test).
-            let su = state_seq[u];
-            let pu = state_pos[u];
-            if when_modified[su] > last_tested {
-                if intra_relocate(ctx, ind, su, pu) {
-                    num_moves += 1;
-                    when_modified[su] = num_moves;
-                    rebuild_plan(ind, su, &mut state_seq, &mut state_pos);
-                    improved = true;
-                }
-                let su = state_seq[u];
-                let pu = state_pos[u];
-                if intra_swap(ctx, ind, su, pu) {
-                    num_moves += 1;
-                    when_modified[su] = num_moves;
-                    rebuild_plan(ind, su, &mut state_seq, &mut state_pos);
-                    improved = true;
-                }
-                let su = state_seq[u];
-                let pu = state_pos[u];
-                if two_opt(ctx, ind, su, pu) {
-                    num_moves += 1;
-                    when_modified[su] = num_moves;
-                    rebuild_plan(ind, su, &mut state_seq, &mut state_pos);
-                    improved = true;
+        let mut bounds = Vec::with_capacity(best_k);
+        let mut j = n;
+        for s in (1..=best_k).rev() {
+            let i = pred[s][j];
+            bounds.push((i, j));
+            j = i;
+        }
+        bounds.reverse();
+        bounds.into_iter().map(|(a, b)| tour[a..b].to_vec()).collect()
+    }
+
+    /// Place a debris where it costs the least, over all plans and positions.
+    fn cheapest_insert(&self, buckets: &mut [Vec<usize>], debris: usize) {
+        let mut best: Option<(usize, usize)> = None;
+        let mut best_delta = f64::INFINITY;
+
+        for (b, bucket) in buckets.iter().enumerate() {
+            let base = self.value(&self.plan(bucket));
+            let mut candidate = Vec::with_capacity(bucket.len() + 1);
+            for position in 0..=bucket.len() {
+                candidate.clear();
+                candidate.extend_from_slice(&bucket[..position]);
+                candidate.push(debris);
+                candidate.extend_from_slice(&bucket[position..]);
+                let delta = self.value(&self.plan(&candidate)) - base;
+                if delta < best_delta {
+                    best = Some((b, position));
+                    best_delta = delta;
                 }
             }
         }
+        match best {
+            Some((b, position)) => buckets[b].insert(position, debris),
+            None => buckets[0].push(debris),
+        }
     }
-    ind.refresh(ctx);
+
+    // --------------------------- Neighborhood --------------------------- //
+
+    /// Rank the potential successors of every debris by proximity.
+    pub fn build_neighbors(&mut self) {
+        let size = self.config.nb_neighbors;
+        let mut neighbors = vec![Vec::new(); self.problem.states.len()];
+        for &i in &self.debris {
+            let mut others: Vec<usize> =
+                self.debris.iter().copied().filter(|&j| j != i).collect();
+            others.sort_by(|&a, &b| {
+                self.proximity(i, a).total_cmp(&self.proximity(i, b))
+            });
+            others.truncate(size);
+            neighbors[i] = others;
+        }
+        self.neighbors = neighbors;
+    }
+
 }
 
 // ========================================================================= //
-// HGS
+// Hybrid genetic search layer
 // ========================================================================= //
 
-fn finalize(ctx: &Ctx, ind: &Individual) -> MissionPlan {
-    let mut plans: Vec<ChaserPlan> = ind.plans
-        .iter()
-        .map(|p| (**p).clone())
-        .collect();
-    while plans.len() < ctx.problem.num_chasers {
-        plans.push(ChaserPlan::empty());
+/// Sequence layer driving the hybrid genetic search.
+pub struct HgsSequence<S: ScheduleLayer> {
+    /// Parameters of the search.
+    pub config: HgsConfig,
+    /// Held before the first `initialize`, and handed to the context after it.
+    idle_schedule: Option<S>,
+    /// Context manager holding all pieces of the algorithm.
+    context: Option<Context<S>>,
+}
+
+impl<S: ScheduleLayer> HgsSequence<S> {
+    /// Build the layer over a scheduling layer, with the default parameters.
+    pub fn new(schedule: S) -> Self {
+        Self::with_config(schedule, HgsConfig::default())
     }
-    let costs: Vec<f64> = plans.iter().map(|p| p.cost).collect();
-    let cost = ctx.objective().aggregate(&costs);
-    let feasible = plans.iter().all(|p| ctx.problem.is_feasible(p));
-    MissionPlan::new(plans, cost, feasible)
-}
 
-pub struct HgsSequencer<'p> {
-    problem: &'p Problem,
-    transfer: &'p dyn TransferLayer,
-    schedule: &'p dyn ScheduleLayer,
-    config: HgsConfig,
-}
-
-impl<'p> HgsSequencer<'p> {
-    pub fn new(
-        problem: &'p Problem,
-        transfer: &'p dyn TransferLayer,
-        schedule: &'p dyn ScheduleLayer,
-        config: HgsConfig,
-    ) -> Self {
+    /// Build the layer over a scheduling layer, with explicit parameters.
+    pub fn with_config(schedule: S, config: HgsConfig) -> Self {
         Self {
-            problem,
-            transfer,
-            schedule,
             config,
+            idle_schedule: Some(schedule),
+            context: None,
         }
     }
 
-    /// Build a sequencer with the default config.
-    pub fn default(
-        problem: &'p Problem,
-        transfer: &'p dyn TransferLayer,
-        schedule: &'p dyn ScheduleLayer,
-    ) -> Self {
-        Self::new(problem, transfer, schedule, HgsConfig::default())
+    /// Build the layer over a scheduling layer, with preset.
+    pub fn with_preset(schedule: S, preset: usize) -> Self {
+        Self::with_config(schedule, HgsConfig::preset(preset))
     }
 
-    fn log_init(&self) {
+    // ------------------------------ Helpers ----------------------------- //
+
+    /// The scheduling layer underneath.
+    pub fn schedule(&self) -> &S {
+        match (&self.context, &self.idle_schedule) {
+            (Some(context), _) => &context.schedule,
+            (None, Some(schedule)) => schedule,
+            _ => unreachable!("the scheduling layer is always held somewhere"),
+        }
+    }
+
+    /// The context holder, available once the layer has been initialized.
+    pub fn context(&self) -> Option<&Context<S>> {
+        self.context.as_ref()
+    }
+
+    /// Reclaim the scheduling layer from wherever it currently lives.
+    fn take_schedule(&mut self) -> S {
+        if let Some(schedule) = self.idle_schedule.take() {
+            return schedule;
+        }
+        self.context
+            .take()
+            .expect("the scheduling layer is always held somewhere")
+            .schedule
+    }
+
+    /// Turn the best individual into a mission plan, one entry per chaser.
+    fn finalize(context: &Context<S>) -> MissionPlan {
+        let plans = context
+            .best()
+            .map(|individual| individual.plans.clone())
+            .expect("the search ended with an empty population");
+
+        let mut out: Vec<ChaserPlan> = plans.iter().map(|p| (**p).clone()).collect();
+        while out.len() < context.problem.num_chasers {
+            out.push(ChaserPlan::empty());
+        }
+        MissionPlan::new(out)
+    }
+
+    // ------------------------------ Logging ----------------------------- //
+
+    /// Log the initialization start.
+    fn log_init(_context: &Context<S>) {
         println!("Constructing initial population...");
-    }
-
-    fn log_iter(&self, start: Instant, iter: usize, cost: f64, feas: bool) {        
-        let timer = start.elapsed().as_secs_f64();        
-        let cost_str = if cost.is_finite() {
-            format!("{cost:.1}")
-        } else {
-            "--".to_string()
-        };
-        let feas_str = if feas { "true" } else { "false" };
-        println!("  {timer:9.1}  {iter:7}  {cost_str:>13}  {feas_str:>8}");
-    }
-
-    fn log_head(&self) {
-        println!("Starting genetic search...");
         println!(
-            "  {:>9}  {:>7}  {:>13}  {:>8}",
-            "time", "iter", "cost", "feasible"
+            " {:>7} {:>7} {:>13} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "time", "iter", "cost", "pop-f", "pop-i", "pop-r", "pen-l", "pen-t"
         );
+    }
+
+    /// Log the initialization end and the start of the search.
+    fn log_head(_context: &Context<S>) {
+        println!("Starting genetic search...");
+    }
+
+    /// Whether a log must be triggered
+    fn log_trigger(context: &Context<S>) -> bool {
+        context.config.verbose && 
+        context.iteration % context.config.log_iter.max(1) == 0
+    }
+
+    /// Log a row of the search progress table.
+    fn log_iter(context: &Context<S>) {
+        if !Self::log_trigger(context) { return; }
+
+        let best = context.best();
+        let cost = match best {
+            Some(individual) => format!("{:.1}", individual.cost),
+            None => "--".to_string(),
+        };
+        println!(
+            " {:7.1} {:7} {:>13} {:>7} {:>7} {:>7.2} {:>7.2e} {:>7.2e}",
+            context.start_time.elapsed().as_secs_f64(),
+            context.iteration,
+            cost,
+            context.population.feasible.len(),
+            context.population.infeasible.len(),
+            context.population.feasible.len() as f64 / context.population.len() as f64,
+            context.metric.penalties[0],
+            context.metric.penalties[1]
+        );
+    }
+
+    /// Log the search end.
+    fn log_foot(context: &Context<S>) {
+        if context.stalled >= context.config.max_nimp {
+            println!("Number of iterations without improvement reached");
+        }
+        if context.iteration >= context.config.max_iter {
+            println!("Maximum number of iterations reached");
+        }
+        if context.start_time.elapsed().as_secs_f64() >= context.config.max_time {
+            println!("Maximum time limit reached");
+        }
     }
 }
 
-impl<'p> SequenceLayer for HgsSequencer<'p> {
-    fn initialize(&self) -> () {}
+impl<S: ScheduleLayer> SequenceLayer for HgsSequence<S> {
+    fn initialize(&mut self, problem: &Rc<Problem>) {
+        let mut schedule = self.take_schedule();
+        schedule.initialize(problem);
 
-    fn evaluate(&self) -> MissionPlan {
-        let start = Instant::now();
+        let mut context = Context::new(Rc::clone(problem), schedule, self.config);
+        context.build_neighbors();
+        self.context = Some(context);
+    }
 
-        let mut rng = SmallRng::seed_from_u64(self.config.seed);
-        let mut ctx = Ctx::new(self.problem, self.transfer, self.schedule, &self.config);
+    fn evaluate(&mut self) -> MissionPlan {
+        // Working variables
+        let context = self.context
+            .as_mut()
+            .expect("initialize() always installs a context");
+        let verbose = context.config.verbose;
 
-        // Generate initial population
-        if self.config.log_iter > 0 { self.log_init(); }
-        for _ in 0..self.config.pop_init {
-            let mut ind = generate(&ctx, &mut rng);
-            improve(&mut ind, &ctx, &mut rng);
-            ctx.add(ind);
+        // Refresh start time
+        context.start_time = Instant::now();
+        
+        if verbose { Self::log_init(context); }
+
+        // Population initialization
+        for _ in 0..context.config.pop_init {
+            let mut child = context.generate();
+            context.improve(&mut child);
+            context.insert(child);
+            if verbose { Self::log_iter(context); }
         }
 
-        // Run genetic search
-        if self.config.log_iter > 0 { self.log_head(); }
-        let mut best = ctx.best_value();
-        let mut iter = 0usize;
-        let mut nimp = 0usize;
-        loop {
-            // Stopping criteria
-            if iter >= self.config.max_iter { break; }
-            if nimp >= self.config.max_nimp { break; }
-            if start.elapsed().as_secs_f64() >= self.config.max_time { break; }
+        if verbose { Self::log_head(context); }
 
-            // Build new individual in the population
-            let mut child = crossover(&ctx, &mut rng);
-            improve(&mut child, &ctx, &mut rng);
-            ctx.add(child);
-            iter += 1;
+        // Refresh iteration count
+        context.iteration = 0;
+        context.stalled = 0;
 
-            // Update best solution
-            let curr = ctx.best_value();
-            if curr < best { best = curr; nimp = 0; } else { nimp += 1; }
-
-            // Log iteration
-            if iter.is_multiple_of(self.config.log_iter) {
-                match ctx.best() {
-                    Some(b) => self.log_iter(start, iter, b.cost, b.feasible),
-                    None => self.log_iter(start, iter, f64::INFINITY, false),
-                }
-            }
+        // Genetic selection
+        while !context.terminate() {
+            let mut child = context.crossover();
+            context.improve(&mut child);
+            context.insert(child);
+            if verbose { Self::log_iter(context); }
         }
 
-        // Retrieve best solution and log final iteration
-        let plan = ctx.best().expect("no best solution found");
-        if self.config.log_iter > 0 {
-            self.log_iter(start, iter, plan.cost, plan.feasible);
+        if verbose {
+            Self::log_iter(context);
+            Self::log_foot(context);
         }
 
-        finalize(&ctx, &plan)
-    }
-
-    fn statistics(&self) -> HashMap<String, Box<dyn Any>> {
-        HashMap::new()
-    }
-}
-
-// ========================================================================= //
-// Tests
-// ========================================================================= //
-
-/// Unit tests for the HGS internals.
-///
-/// Port of the `test_hgs_*` cases in
-/// `references/pyadr/tests/test_sequence.py`. They live here rather than under
-/// `tests/` because `Ctx`, `Individual`, `generate`, `improve`, `giant_tour`
-/// and `split` are private to the crate.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::io::read_debris;
-    use crate::orbit::DAY;
-    use crate::problem::make_problem;
-    use crate::schedule::{NowaitConfig, NowaitScheduler};
-    use crate::transfer::{QlawConfig, QlawTransfer};
-
-    /// The Python fixture: 3 chasers, a 2500-day horizon and a load limit of 5.
-    fn fixture_problem() -> Problem {
-        let debris = read_debris("data/odrc.csv").expect("catalogue must be readable");
-        make_problem(&debris, 3, Some(2500.0 * DAY), Some(5), None, "sum")
-            .expect("problem must be constructible")
-    }
-
-    fn quiet(seed: u64) -> HgsConfig {
-        HgsConfig { seed, log_iter: 0, ..HgsConfig::default() }
-    }
-
-    /// Run `body` with a fully wired context over the fixture problem.
-    fn with_ctx(seed: u64, body: impl FnOnce(&Ctx, &mut SmallRng)) {
-        let problem = fixture_problem();
-        let transfer = QlawTransfer::new(
-            &problem,
-            QlawConfig { thrust: 3e-3, ..QlawConfig::default() },
-        );
-        let schedule = NowaitScheduler::new(&problem, &transfer, NowaitConfig::default());
-        let config = quiet(seed);
-        let ctx = Ctx::new(&problem, &transfer, &schedule, &config);
-        let mut rng = SmallRng::seed_from_u64(seed);
-        body(&ctx, &mut rng);
-    }
-
-    #[test]
-    fn local_search_improves_the_greedy_start() {
-        with_ctx(1, |ctx, rng| {
-            let mut ind = generate(ctx, rng);
-            let before = ctx.metric.value(&ind);
-            improve(&mut ind, ctx, rng);
-            let after = ctx.metric.value(&ind);
-            assert!(
-                after <= before + 1e-6,
-                "local search made the solution worse: {before:.1} -> {after:.1}"
-            );
-            assert!(
-                after < before,
-                "local search did not improve the greedy start: {before:.1} -> {after:.1}"
-            );
-        });
-    }
-
-    #[test]
-    fn split_preserves_all_debris() {
-        with_ctx(2, |ctx, rng| {
-            let ind = generate(ctx, rng);
-            let giant = giant_tour(ctx, &ind);
-            let buckets = split(ctx, &giant, ctx.problem.num_chasers);
-
-            let mut flat: Vec<usize> = buckets.iter().flatten().copied().collect();
-            let mut expected = giant.clone();
-            flat.sort_unstable();
-            expected.sort_unstable();
-            assert_eq!(flat, expected, "split dropped or duplicated debris");
-            assert!(
-                buckets.len() <= ctx.problem.num_chasers,
-                "split used more routes ({}) than chasers ({})",
-                buckets.len(),
-                ctx.problem.num_chasers
-            );
-        });
-    }
-
-    #[test]
-    fn generated_individuals_cover_the_catalogue() {
-        with_ctx(3, |ctx, rng| {
-            for _ in 0..5 {
-                let ind = generate(ctx, rng);
-                let mut visited: Vec<usize> = ind
-                    .plans
-                    .iter()
-                    .flat_map(|p| p.nodes_indices.iter().copied())
-                    .filter(|&n| n != ctx.depot)
-                    .collect();
-                visited.sort_unstable();
-                let before = visited.len();
-                visited.dedup();
-                assert_eq!(before, visited.len(), "a debris was visited twice");
-                assert_eq!(visited, ctx.debris, "a generated individual dropped debris");
-            }
-        });
-    }
-
-    #[test]
-    fn local_search_preserves_the_catalogue() {
-        with_ctx(4, |ctx, rng| {
-            let mut ind = generate(ctx, rng);
-            improve(&mut ind, ctx, rng);
-            let mut visited: Vec<usize> = ind
-                .plans
-                .iter()
-                .flat_map(|p| p.nodes_indices.iter().copied())
-                .filter(|&n| n != ctx.depot)
-                .collect();
-            visited.sort_unstable();
-            visited.dedup();
-            assert_eq!(visited, ctx.debris, "local search dropped or duplicated debris");
-        });
+        Self::finalize(context)
     }
 }

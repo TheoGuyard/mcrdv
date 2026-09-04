@@ -1,138 +1,119 @@
-//! One-shot clustering sequencer (capacitated clustering by RAAN).
+//! Sequence layer partitioning the catalogue by right ascension in one sweep.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::f64::consts::TAU;
+use std::rc::Rc;
 
-use crate::problem::{ChaserPlan, MaxLoad, MissionPlan, Problem};
-use crate::solver::{ScheduleLayer, SequenceLayer, TransferLayer};
-use crate::transfer::qlaw::linspace;
+use crate::orbit::TAU;
+use crate::problem::{ChaserPlan, MissionPlan, Problem, DEPOT};
+use crate::solver::{ScheduleLayer, SequenceLayer};
 
-/// Assign debris to chasers by clustering on RAAN, one cluster per chaser.
-pub struct ClusterSequencer<'p> {
-    problem: &'p Problem,
-    #[allow(dead_code)]
-    transfer: &'p dyn TransferLayer,
-    schedule: &'p dyn ScheduleLayer,
+/// Sequence layer based on a capacitated clustering of the debris RAAN.
+#[derive(Debug, Clone)]
+pub struct ClusterSequence<S: ScheduleLayer> {
+    schedule: S,
+    problem: Option<Rc<Problem>>,
 }
 
-impl<'p> ClusterSequencer<'p> {
-    pub fn new(
-        problem: &'p Problem,
-        transfer: &'p dyn TransferLayer,
-        schedule: &'p dyn ScheduleLayer,
-    ) -> Self {
-        Self { problem, transfer, schedule }
+impl<S: ScheduleLayer> ClusterSequence<S> {
+    /// Build the layer over a scheduling layer.
+    pub fn new(schedule: S) -> Self {
+        Self {
+            schedule,
+            problem: None,
+        }
     }
 
-    /// The depot node index.
-    fn depot(&self) -> usize {
-        0
+    /// The scheduling layer underneath.
+    pub fn schedule(&self) -> &S {
+        &self.schedule
     }
 
-    /// The tightest `MaxLoad` cap, or `usize::MAX` when the load is unbounded.
-    fn max_load(&self) -> usize {
-        self.problem
-            .constraints
-            .iter()
-            .filter_map(|c| c.as_any().downcast_ref::<MaxLoad>())
-            .map(|c| c.qmax)
-            .min()
-            .unwrap_or(usize::MAX)
+    /// The scheduling layer underneath, mutably.
+    pub fn schedule_mut(&mut self) -> &mut S {
+        &mut self.schedule
     }
 
-    /// Retrieve RAAN from state index.
-    fn raan(&self, i: usize) -> f64 {
-        self.problem.catalog.r[i]
-    }
-
-    /// Shortest angular distance between two state RAAN values [rad].
-    fn raan_distance(&self, i: usize, j: usize) -> f64 {
-        let d = (self.raan(i) - self.raan(j)).abs().rem_euclid(TAU);
+    /// Shortest angular distance between the orbital planes of two states \[rad\].
+    fn raan_distance(problem: &Rc<Problem>, i: usize, j: usize) -> f64 {
+        let d = (problem.states[i].r - problem.states[j].r).abs() % TAU;
         d.min(TAU - d)
     }
 
-    /// Debris indices sorted by RAAN, tie based on debris order.
-    fn sweep(&self) -> Vec<usize> {
-        let mut debris = self.problem.debris();
-        debris.sort_by(|&a, &b| self.raan(a).total_cmp(&self.raan(b)));
-        debris
-    }
-
-    /// Seed `k` medoids evenly along the RAAN sweep.
-    fn medoids(&self, by_raan: &[usize], k: usize) -> Vec<usize> {
+    /// Seed `k` medoids spread evenly along the RAAN sweep.
+    fn medoids(by_raan: &[usize], k: usize) -> Vec<usize> {
         let n = by_raan.len();
-        let mut grid = linspace(0.0, (n - 1) as f64, k);
-        if let Some(last) = grid.last_mut() {
-            *last = (n - 1) as f64;
-        }
-        let mut idx: Vec<usize> = grid
-            .into_iter()
-            .map(|x| round_half_even(x) as usize)
+        let mut positions: Vec<usize> = (0..k)
+            .map(|s| {
+                if s + 1 == k {
+                    n - 1
+                } else {
+                    round_half_even(
+                        (n - 1) as f64 * (s as f64) / 
+                        ((k - 1).max(1) as f64)
+                    )
+                }
+            })
             .collect();
-        idx.sort_unstable();
-        idx.dedup();
-        idx.into_iter().map(|i| by_raan[i]).collect()
+        positions.sort_unstable();
+        positions.dedup();
+        positions.into_iter().map(|p| by_raan[p]).collect()
     }
 
-    /// Nearest-medoid assignment in RAAN, respecting the load capacity.
-    fn assign(&self, debris: &[usize], medoids: &[usize]) -> Vec<Vec<usize>> {
-        let cap = self.max_load();
+    /// Assign each debris to its nearest medoid, respecting the load limit.
+    fn assign(problem: &Rc<Problem>, debris: &[usize], medoids: &[usize]) -> Vec<Vec<usize>> {
         let mut counts = vec![0usize; medoids.len()];
         let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); medoids.len()];
-        let mut assigned: HashMap<usize, usize> = HashMap::new();
+        let mut assigned = vec![false; problem.states.len()];
 
-        // All (distance, debris, medoid) triples, cheapest first. Ties break on
-        // the debris index then the medoid index, matching Python's tuple sort.
-        let mut pairs: Vec<(f64, usize, usize)> = debris
-            .iter()
-            .flat_map(|&d| {
-                medoids
-                    .iter()
-                    .enumerate()
-                    .map(move |(mi, &m)| (d, mi, m))
-            })
-            .map(|(d, mi, m)| (self.raan_distance(d, m), d, mi))
-            .collect();
+        // Cheapest (distance, debris, medoid) triples first; ordering by the
+        // two indices after the distance keeps ties resolved deterministically.
+        let mut pairs: Vec<(f64, usize, usize)> = Vec::with_capacity(debris.len() * medoids.len());
+        for &d in debris {
+            for (mi, &m) in medoids.iter().enumerate() {
+                pairs.push((Self::raan_distance(problem, d, m), d, mi));
+            }
+        }
         pairs.sort_by(|a, b| {
-            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
+            a.0.total_cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
         });
 
-        for (_, d, mi) in pairs {
-            if assigned.contains_key(&d) || counts[mi] >= cap {
+        for &(_, d, mi) in &pairs {
+            if assigned[d] || counts[mi] >= problem.max_load {
                 continue;
             }
-            assigned.insert(d, mi);
+            assigned[d] = true;
             counts[mi] += 1;
             buckets[mi].push(d);
         }
 
-        // Debris that hit every capacity: drop into the nearest medoid with room.
+        // A debris that found every cluster full falls back on the nearest one
+        // with room left, or simply the nearest one when none has any.
         for &d in debris {
-            if assigned.contains_key(&d) {
+            if assigned[d] {
                 continue;
             }
             let mi = (0..medoids.len())
-                .min_by(|&a, &b| {
-                    let (fa, fb) = (counts[a] >= cap, counts[b] >= cap);
-                    fa.cmp(&fb).then(
-                        self.raan_distance(d, medoids[a])
-                            .total_cmp(&self.raan_distance(d, medoids[b])),
-                    )
+                .min_by(|&x, &y| {
+                    let full = |m: usize| counts[m] >= problem.max_load;
+                    full(x)
+                        .cmp(&full(y))
+                        .then(
+                            Self::raan_distance(problem, d, medoids[x])
+                                .total_cmp(&Self::raan_distance(problem, d, medoids[y])),
+                        )
                 })
-                .expect("`assign` requires at least one medoid");
+                .unwrap_or(0);
+            assigned[d] = true;
             counts[mi] += 1;
             buckets[mi].push(d);
         }
-
         buckets
     }
 
-    /// Exactly `k` buckets, never dropping a debris (overflow merged into the
-    /// last kept bucket).
-    fn pad(&self, buckets: Vec<Vec<usize>>, k: usize) -> Vec<Vec<usize>> {
-        let mut buckets: Vec<Vec<usize>> =
-            buckets.into_iter().filter(|b| !b.is_empty()).collect();
+    /// Return exactly `k` buckets, without ever dropping a debris.
+    fn pad(mut buckets: Vec<Vec<usize>>, k: usize) -> Vec<Vec<usize>> {
+        buckets.retain(|b| !b.is_empty());
         if buckets.len() > k && k > 0 {
             let overflow: Vec<usize> = buckets.split_off(k).into_iter().flatten().collect();
             buckets[k - 1].extend(overflow);
@@ -143,76 +124,60 @@ impl<'p> ClusterSequencer<'p> {
         buckets
     }
 
-    /// Cost every bucket through the schedule layer and aggregate the mission.
+    /// Schedule every bucket, prepending the departure orbit to each.
     fn finalize(&self, buckets: &[Vec<usize>]) -> MissionPlan {
-        let plans: Vec<ChaserPlan> = buckets
+        let plans = buckets
             .iter()
-            .map(|b| {
-                let mut seq = Vec::with_capacity(b.len() + 1);
-                seq.push(self.depot());
-                seq.extend_from_slice(b);
-                (*self.schedule.evaluate(&seq)).clone()
+            .map(|bucket| {
+                let mut sequence = Vec::with_capacity(bucket.len() + 1);
+                sequence.push(DEPOT);
+                sequence.extend_from_slice(bucket);
+                (*self.schedule.evaluate(&sequence)).clone()
             })
             .collect();
-        let costs: Vec<f64> = plans.iter().map(|p| p.cost).collect();
-        let cost = self.problem.objective.aggregate(&costs);
-        let feasible = plans.iter().all(|p| p.feasible);
-        MissionPlan::new(plans, cost, feasible)
+        MissionPlan::new(plans)
     }
 }
 
-impl<'p> SequenceLayer for ClusterSequencer<'p> {
-    fn initialize(&self) {}
+impl<S: ScheduleLayer> SequenceLayer for ClusterSequence<S> {
+    fn initialize(&mut self, problem: &Rc<Problem>) {
+        self.schedule.initialize(problem);
+        self.problem = Some(Rc::clone(problem));
+    }
 
-    fn evaluate(&self) -> MissionPlan {
-        if self.problem.num_debris == 0 {
-            return MissionPlan::new(
-                vec![ChaserPlan::empty()],
-                0.0,
-                true
-            );
+    fn evaluate(&mut self) -> MissionPlan {
+        let problem = self
+            .problem
+            .as_ref()
+            .expect("initialize() must be called before evaluate()");
+        let debris: Vec<usize> = problem.debris().collect();
+        if debris.is_empty() {
+            return MissionPlan::new(vec![ChaserPlan::empty()]);
         }
 
-        if self.problem.num_chasers == 0 {
-            return MissionPlan::new(
-                Vec::new(),
-                self.problem.objective.aggregate(&[]), 
-                false
-            );
-        }
+        let mut by_raan = debris.clone();
+        by_raan.sort_by(|&a, &b| problem.states[a].r.total_cmp(&problem.states[b].r));
 
-        let by_raan = self.sweep();
-
-        let buckets = if self.problem.num_chasers >= by_raan.len() {
+        let buckets = if problem.num_chasers >= by_raan.len() {
             by_raan.iter().map(|&d| vec![d]).collect()
         } else {
-            let medoids = self.medoids(&by_raan, self.problem.num_chasers);
-            let mut buckets = self.assign(&by_raan, &medoids);
+            let medoids = Self::medoids(&by_raan, problem.num_chasers);
+            let mut buckets = Self::assign(problem, &by_raan, &medoids);
             for bucket in &mut buckets {
-                bucket.sort_by(|&a, &b| self.raan(a).total_cmp(&self.raan(b)));
+                bucket.sort_by(|&a, &b| problem.states[a].r.total_cmp(&problem.states[b].r));
             }
             buckets
         };
 
-        self.finalize(&self.pad(buckets, self.problem.num_chasers))
-    }
-
-    fn statistics(&self) -> HashMap<String, Box<dyn Any>> {
-        HashMap::new()
+        self.finalize(&Self::pad(buckets, problem.num_chasers))
     }
 }
 
-/// Round to the nearest integer, ties to the even neighbour.
-fn round_half_even(x: f64) -> f64 {
+/// Round to the nearest integer, halves going to the even neighbor.
+fn round_half_even(x: f64) -> usize {
     let floor = x.floor();
-    let frac = x - floor;
-    if frac > 0.5 {
-        floor + 1.0
-    } else if frac < 0.5 {
-        floor
-    } else if (floor as i64) % 2 == 0 {
-        floor
-    } else {
-        floor + 1.0
-    }
+    let diff = x - floor;
+    let up = diff > 0.5 || (diff == 0.5 && (floor as i64) % 2 != 0);
+    let n = if up { floor + 1.0 } else { floor };
+    n.max(0.0) as usize
 }
