@@ -17,5 +17,5 @@ __pycache__/
 
 
 # Experiments
-exp/results/*
-!exp/results/.gitkeep
+experiments/results/*
+!experiments/results/.gitkeep
