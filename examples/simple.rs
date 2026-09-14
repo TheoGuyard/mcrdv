@@ -1,8 +1,4 @@
-//! Plan a mission over a bundled catalogue and print the resulting schedule.
-//!
 //! Run with `cargo run --release --example simple`.
-
-use std::rc::Rc;
 
 use mcrdv::{centroid, format_mission, read_debris, DAY};
 use mcrdv::{DpSchedule, HgsSequence, Problem, QlawTransfer, Solver};
@@ -18,12 +14,12 @@ fn main() {
     states.extend(debris);
 
     // Define the instance and its operational limits.
-    let problem = Rc::new(Problem::new(
+    let problem = Problem::new(
         states,
         15,           // chasers in the swarm
         365.0 * DAY,  // per-chaser mission duration limit
         10,           // per-chaser debris capacity
-    ));
+    );
     println!("{problem}");
 
     // Build the solver layer stack from the bottom up.

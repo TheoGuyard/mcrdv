@@ -1,6 +1,6 @@
 //! Sequence layer based on a hybrid genetic search.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -186,6 +186,12 @@ impl HgsConfig {
     /// Set configuration verbosity.
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
+        self
+    }
+
+    /// Set configuration maximum time budget in seconds.
+    pub fn with_max_time(mut self, max_time: f64) -> Self {
+        self.max_time = max_time;
         self
     }
 }
@@ -891,6 +897,29 @@ impl<'a, S: ScheduleLayer> Search<'a, S> {
 // Context
 // ========================================================================= //
 
+/// Algorithmic trace.
+pub struct LogEntry {
+    /// Time in seconds since the start of the run.
+    pub time: f64,
+    /// Iteration number.
+    pub iter: usize,
+    /// Number of iterations without improvement.
+    pub nimp: usize,
+    /// Penalized cost of the incumbent.
+    pub cost: f64,
+    /// Number of feasible individuals in the population.
+    pub num_feasible: usize,
+    /// Number of infeasible individuals in the population.
+    pub num_infeasible: usize,
+    /// Current penalties for the load and time limits.
+    pub penalty_load: f64,
+    /// Current penalties for the load and time limits.
+    pub penalty_time: f64,
+}
+
+/// Algorithmic trace, one entry per iteration.
+pub type Trace = Vec<LogEntry>;
+
 /// Context manager for hybrid genetic search.
 pub struct Context<S: ScheduleLayer> {
     /// The instance being solved.
@@ -915,6 +944,8 @@ pub struct Context<S: ScheduleLayer> {
     pub iteration: usize,
     /// Number of iterations without improvement
     pub stalled: usize,
+    /// Algorithmic trace
+    pub trace: Trace,
 }
 
 impl<S: ScheduleLayer> Context<S> {
@@ -934,6 +965,7 @@ impl<S: ScheduleLayer> Context<S> {
             start_time: Instant::now(),
             iteration: 0,
             stalled: 0,
+            trace: Trace::new(),
         }
     }
 
@@ -1528,10 +1560,11 @@ impl<S: ScheduleLayer> Context<S> {
 
 /// Sequence layer driving the hybrid genetic search.
 pub struct HgsSequence<S: ScheduleLayer> {
+    /// Scheduling layer (handed to context after initialization).
+    schedule: Option<S>,
     /// Parameters of the search.
     pub config: HgsConfig,
-    /// Held before the first `initialize`, and handed to the context after it.
-    idle_schedule: Option<S>,
+
     /// Context manager holding all pieces of the algorithm.
     context: Option<Context<S>>,
 }
@@ -1545,8 +1578,8 @@ impl<S: ScheduleLayer> HgsSequence<S> {
     /// Build the layer over a scheduling layer, with explicit parameters.
     pub fn with_config(schedule: S, config: HgsConfig) -> Self {
         Self {
+            schedule: Some(schedule),
             config,
-            idle_schedule: Some(schedule),
             context: None,
         }
     }
@@ -1556,11 +1589,16 @@ impl<S: ScheduleLayer> HgsSequence<S> {
         Self::with_config(schedule, HgsConfig::preset(preset))
     }
 
+    /// Get the trace of the last run, if any.
+    pub fn get_trace(&self) -> Option<&Trace> {
+        self.context.as_ref().map(|c| &c.trace)
+    }
+
     // ------------------------------ Helpers ----------------------------- //
 
     /// The scheduling layer underneath.
     pub fn schedule(&self) -> &S {
-        match (&self.context, &self.idle_schedule) {
+        match (&self.context, &self.schedule) {
             (Some(context), _) => &context.schedule,
             (None, Some(schedule)) => schedule,
             _ => unreachable!("the scheduling layer is always held somewhere"),
@@ -1574,7 +1612,7 @@ impl<S: ScheduleLayer> HgsSequence<S> {
 
     /// Reclaim the scheduling layer from wherever it currently lives.
     fn take_schedule(&mut self) -> S {
-        if let Some(schedule) = self.idle_schedule.take() {
+        if let Some(schedule) = self.schedule.take() {
             return schedule;
         }
         self.context
@@ -1603,8 +1641,8 @@ impl<S: ScheduleLayer> HgsSequence<S> {
     fn log_init(_context: &Context<S>) {
         println!("Constructing initial population...");
         println!(
-            " {:>7} {:>7} {:>13} {:>7} {:>7} {:>7} {:>7} {:>7}",
-            "time", "iter", "cost", "pop-f", "pop-i", "pop-r", "pen-l", "pen-t"
+            " {:>7} {:>7} {:>7} {:>13} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "time", "iter", "nimp", "cost", "pop-f", "pop-i", "pop-r", "pen-l", "pen-t"
         );
     }
 
@@ -1620,7 +1658,7 @@ impl<S: ScheduleLayer> HgsSequence<S> {
     }
 
     /// Log a row of the search progress table.
-    fn log_iter(context: &Context<S>) {
+    fn log_iter(context: &mut Context<S>) {
         if !Self::log_trigger(context) { return; }
 
         let best = context.best();
@@ -1629,15 +1667,29 @@ impl<S: ScheduleLayer> HgsSequence<S> {
             None => "--".to_string(),
         };
         println!(
-            " {:7.1} {:7} {:>13} {:>7} {:>7} {:>7.2} {:>7.2e} {:>7.2e}",
+            " {:7.1} {:7} {:>7} {:>13} {:>7} {:>7} {:>7.2} {:>7.2e} {:>7.2e}",
             context.start_time.elapsed().as_secs_f64(),
             context.iteration,
+            context.stalled,
             cost,
             context.population.feasible.len(),
             context.population.infeasible.len(),
             context.population.feasible.len() as f64 / context.population.len() as f64,
             context.metric.penalties[0],
             context.metric.penalties[1]
+        );
+
+        context.trace.push(
+            LogEntry {
+                time: context.start_time.elapsed().as_secs_f64(),
+                iter: context.iteration,
+                nimp: context.stalled,
+                cost: best.map(|i| i.cost).unwrap_or(f64::INFINITY),
+                num_feasible: context.population.feasible.len(),
+                num_infeasible: context.population.infeasible.len(),
+                penalty_load: context.metric.penalties[0],
+                penalty_time: context.metric.penalties[1],
+            }
         );
     }
 
@@ -1665,15 +1717,18 @@ impl<S: ScheduleLayer> SequenceLayer for HgsSequence<S> {
         self.context = Some(context);
     }
 
+    /// Evaluate the search.
     fn evaluate(&mut self) -> MissionPlan {
+
         // Working variables
         let context = self.context
             .as_mut()
             .expect("initialize() always installs a context");
         let verbose = context.config.verbose;
 
-        // Refresh start time
+        // Refresh context
         context.start_time = Instant::now();
+        context.trace.clear();
         
         if verbose { Self::log_init(context); }
 

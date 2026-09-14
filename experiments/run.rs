@@ -1,72 +1,108 @@
-/// Run as: cargo run --release --example run -- exp/config.yaml
-
+//! Run with `cargo run --release --experiments simple`.
 
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::iter;
 
+use mcrdv::MissionPlan;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use scorpion::inner::qlaw::QlawParams;
-use scorpion::inner::InnerParams;
-use scorpion::io::load_states;
-use scorpion::middle::dynprog::DynProgParams;
-use scorpion::middle::MiddleParams;
-use scorpion::orbit::centroid;
-use scorpion::outer::hgs::{HgsParams, GenerationMethod};
-use scorpion::outer::{OuterParams, Trace};
-use scorpion::problem::Problem;
-use scorpion::solver::{Params, Solution, Solver};
+use mcrdv::io::{read_debris,format_mission};
+use mcrdv::orbit::centroid;
+use mcrdv::problem::Problem;
+use mcrdv::sequence::{HgsConfig,HgsSequence};
+use mcrdv::schedule::DpSchedule;
+use mcrdv::solver::{SequenceLayer,Solver};
+use mcrdv::transfer::qlaw::QlawTransfer;
 
 
 // ================================ Solvers ================================ //
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScorpionConfig {
-    pub inner: ScorpionInner,
-    pub middle: ScorpionMiddle,
-    pub outer: ScorpionOuter,
+pub struct ConfigMcrdv {
+    pub transfer: ConfigMcrdvTransfer,
+    pub schedule: ConfigMcrdvSchedule,
+    pub sequence: ConfigMcrdvSequence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "args", rename_all = "lowercase")]
-pub enum ScorpionInner {
-    Qlaw(ScorpionQlaw),
+pub enum ConfigMcrdvTransfer {
+    Qlaw(ConfigMcrdvQlaw),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScorpionQlaw {
-    pub max_thrust: f64,
+pub struct ConfigMcrdvQlaw {
+    #[serde(default = "ConfigMcrdvQlaw::default_thrust")]
+    pub thrust: f64,
+    #[serde(default = "ConfigMcrdvQlaw::default_factor")]
+    pub factor: f64,
+    #[serde(default = "ConfigMcrdvQlaw::default_num_samples")]
+    pub num_samples: usize,
+    #[serde(default = "ConfigMcrdvQlaw::default_num_hints")]
+    pub num_hints: usize,
+    #[serde(default = "ConfigMcrdvQlaw::default_cost_factor_time")]
+    pub cost_factor_time: f64,
+    #[serde(default = "ConfigMcrdvQlaw::default_cost_factor_fuel")]
+    pub cost_factor_fuel: f64,
+}
+
+impl ConfigMcrdvQlaw {
+    fn default_thrust() -> f64 { 3e-3 }
+    fn default_factor() -> f64 { 1.5 }
+    fn default_num_samples() -> usize { 512 }
+    fn default_num_hints() -> usize { 16 }
+    fn default_cost_factor_time() -> f64 { 0.0 }
+    fn default_cost_factor_fuel() -> f64 { 1.0 }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "args", rename_all = "lowercase")]
-pub enum ScorpionMiddle {
-    DynProg(ScorpionDynProg),
+pub enum ConfigMcrdvSchedule {
+    Dp(ConfigMcrdvDp),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScorpionDynProg {
+pub struct ConfigMcrdvDp {
+    #[serde(default = "ConfigMcrdvDp::allow_waiting")]
     pub allow_waiting: bool,
-    pub grid_steps: usize,
-    pub departure_hints: bool,
+    #[serde(default = "ConfigMcrdvDp::grid_size")]
+    pub grid_size: usize,
+    #[serde(default = "ConfigMcrdvDp::use_hints")]
+    pub use_hints: bool,
+    #[serde(default = "ConfigMcrdvDp::use_cache")]
+    pub use_cache: bool,
+}
+
+impl ConfigMcrdvDp {
+    fn allow_waiting() -> bool { true }
+    fn grid_size() -> usize { 32 }
+    fn use_hints() -> bool { true }
+    fn use_cache() -> bool { true }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "args", rename_all = "lowercase")]
-pub enum ScorpionOuter {
-    Hgs(ScorpionHgs),
+pub enum ConfigMcrdvSequence {
+    Hgs(ConfigMcrdvHgs),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScorpionHgs {
-    pub preset: Option<usize>,
-    pub seed: Option<u64>,
-    pub time_limit: Option<f64>,
-    pub generation: Option<String>,
-    pub raan_ordering: Option<bool>,
+pub struct ConfigMcrdvHgs {
+    #[serde(default = "ConfigMcrdvHgs::default_seed")]
+    pub seed: u64,
+    #[serde(default = "ConfigMcrdvHgs::default_preset")]
+    pub preset: usize,
+    #[serde(default = "ConfigMcrdvHgs::default_max_time")]
+    pub max_time: f64,
+}
+
+impl ConfigMcrdvHgs {
+    fn default_seed() -> u64 { 0 }
+    fn default_preset() -> usize { 5 }
+    fn default_max_time() -> f64 { 60.0 }
 }
 
 
@@ -87,113 +123,89 @@ pub struct ConfigExperiment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigProblem {
     pub path: String,
-    pub max_time: Option<f64>,
-    pub max_fuel: Option<f64>,
+    pub pos_chasers: String,
+    pub num_chasers: usize,
+    pub max_time: f64,
     pub max_load: usize,
-    pub factor_time: f64,
-    pub factor_fuel: f64,
-    pub chaser_init: String,
-    pub chaser_load: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "args", rename_all = "lowercase")]
 pub enum ConfigSolver {
-    Scorpion(ScorpionConfig),
+    Mcrdv(ConfigMcrdv),
 }
 
 #[derive(Debug, Serialize)]
 struct ExperimentResult<'a> {
     config: &'a Config,
-    solution: &'a Solution,
-    trace: &'a Trace,
+    result: &'a MissionPlan,
 }
 
 
 fn build_problem(cfg: &ConfigProblem) -> Result<Problem, Box<dyn Error>> {
 
-    let debris = load_states(&cfg.path)?;
-
-    let chasers = match cfg.chaser_init.as_str() {
-        "centroid" => centroid(&debris)?,
-        _ => return Err(format!("unknown chaser_init '{}'", cfg.chaser_init).into()),
+    let debris = read_debris(&cfg.path);
+    let mut states = match cfg.pos_chasers.as_str() {
+        "centroid" => vec![centroid(&debris)],
+        _ => return Err("unknown chaser_init".into())
     };
-
-    let fac_chasers = cfg.chaser_load;
-    let min_chasers = ((debris.len() as f64) / (cfg.max_load as f64)).ceil();
-    let num_chasers = (fac_chasers * min_chasers) as usize;
+    states.extend(debris);
     
-    Problem::new(
-        debris,
-        chasers,
-        num_chasers,
-        cfg.max_time.unwrap_or(f64::INFINITY),
-        cfg.max_fuel.unwrap_or(f64::INFINITY),
-        cfg.max_load,
-        cfg.factor_time,
-        cfg.factor_fuel,
-    )
+    let problem = Problem::new(
+        states,
+        cfg.num_chasers,
+        cfg.max_time,
+        cfg.max_load
+    );
+    
+    Ok(problem)
 }
 
-fn build_solver(cfg: &ConfigSolver) -> Result<Solver, Box<dyn Error>> {
+fn build_solver(cfg: &ConfigSolver) -> Result<Solver<impl SequenceLayer>, Box<dyn Error>> {
 
-    let ConfigSolver::Scorpion(scorpion) = cfg;
+    let ConfigSolver::Mcrdv(mcrdv) = cfg;
 
-    // Inner loop
-    let inner = match &scorpion.inner {
-        ScorpionInner::Qlaw(p) => {
-            let mut params = QlawParams::default();
-            params.max_thrust = p.max_thrust;
-            InnerParams::Qlaw(params)
+    let transfer = match &mcrdv.transfer {
+        ConfigMcrdvTransfer::Qlaw(p) => {
+            QlawTransfer::with_options(
+                p.thrust,
+                p.factor,
+                p.num_samples,
+                p.num_hints,
+                p.cost_factor_time,
+                p.cost_factor_fuel
+            )
         }
     };
 
-    // Middle loop
-    let middle = match &scorpion.middle {
-        ScorpionMiddle::DynProg(p) => {
-            let mut params = DynProgParams::default();
-            params.allow_waiting = p.allow_waiting;
-            params.grid_steps = p.grid_steps;
-            params.departure_hints = p.departure_hints;
-            MiddleParams::DynProg(params)
+    let schedule = match &mcrdv.schedule {
+        ConfigMcrdvSchedule::Dp(p) => {
+            DpSchedule::with_options(
+                transfer,
+                p.allow_waiting,
+                p.grid_size,
+                p.use_hints,
+                p.use_cache
+            )
         }
     };
 
-    // Outer loop
-    let outer = match &scorpion.outer {
-        ScorpionOuter::Hgs(p) => {
-            let mut params = match p.preset {
-                Some(preset) => HgsParams::preset(preset),
-                None => HgsParams::default(),
-            };            
-            if let Some(seed) = p.seed {
-                params.seed = seed;
-            }
-            if let Some(time_limit) = p.time_limit {
-                params.time_limit = time_limit;
-            }
-            if let Some(generation) = &p.generation {
-                params.generation = match generation.as_str() {
-                    "greedy" => GenerationMethod::Greedy,
-                    "random" => GenerationMethod::Random,
-                    _ => return Err(format!("unknown generation '{}'", generation).into()),
-                };
-            }
-            if let Some(raan_ordering) = p.raan_ordering {
-                params.raan_ordering = raan_ordering;
-            }
-            OuterParams::Hgs(params)
+    let sequence = match &mcrdv.sequence {
+        ConfigMcrdvSequence::Hgs(p) => {
+            let hgs_cfg = HgsConfig::preset(p.preset)
+                .with_seed(p.seed)
+                .with_max_time(p.max_time);
+            HgsSequence::with_config(schedule, hgs_cfg)
         }
     };
 
-    let params = Params { inner, middle, outer };
-    Ok(Solver::new(&params))
+    Ok(Solver::new(sequence))
 }
 
 fn build_uuid(len: usize) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
-    let mut rng = rand::thread_rng();
-    let one_char = || CHARSET[rng.gen_range(0..CHARSET.len())] as char;
+    let mut rng = rand::rng();
+    let one_char = || CHARSET[rng.random_range(0..CHARSET.len())] as char;
     iter::repeat_with(one_char).take(len).collect()
 }
 
@@ -208,21 +220,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let text = fs::read_to_string(&path).map_err(|e| format!("reading '{path}': {e}"))?;
     let config: Config = serde_json::from_str(&text).map_err(|e| format!("parsing '{path}': {e}"))?;
 
-    println!("====================== EXPERIMENT START ======================");
+    println!("====================== EXPERIMENT STARTS =====================");
     let problem = build_problem(&config.problem)?;
-    let solver = build_solver(&config.solver)?;
-    let (solution, trace) = solver.solve(&problem);
-    println!("{solution}");
+    let mut solver = build_solver(&config.solver)?;
+    let result = solver.solve(&problem);
+    println!("{}", format_mission(&problem, &result));
     let result = ExperimentResult {
         config: &config,
-        solution: &solution,
-        trace: &trace,
+        result: &result,
     };
     println!("====================== EXPERIMENT FINISH =====================");
 
     // Save results
     if save {
-        let out_dir = PathBuf::from("exp/results");
+        let out_dir = PathBuf::from("experiments/results");
         fs::create_dir_all(&out_dir).map_err(|e| format!("creating '{}': {e}", out_dir.display()))?;
         let out_uuid = build_uuid(12);
         let out_path = out_dir.join(format!("{}_{}.json", config.experiment.name, out_uuid));
@@ -231,5 +242,5 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Saved results to {}", out_path.display());
     }
 
-    return Ok(());
+    Ok(())
 }

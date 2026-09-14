@@ -30,7 +30,7 @@ pub struct QlawTransfer {
 impl QlawTransfer {
     /// Build a transfer layer with default options.
     pub fn new() -> Self {
-        Self::with_options(3e-3, 1.5, 512, 10, 0.0, 1.0)
+        Self::with_options(3e-3, 1.5, 512, 16, 0.0, 1.0)
     }
 
     /// Build a transfer layer.

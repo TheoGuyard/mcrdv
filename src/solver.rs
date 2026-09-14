@@ -75,7 +75,9 @@ impl<Q: SequenceLayer> Solver<Q> {
     }
 
     /// Plan a mission for a problem instance.
-    pub fn solve(&mut self, problem: &Rc<Problem>) -> MissionPlan {
+    pub fn solve(&mut self, problem: &Problem) -> MissionPlan {
+        let problem = &Rc::new(problem.clone());
+
         let start = Instant::now();
 
         if self.verbose { 

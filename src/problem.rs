@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::orbit::{KepState, DAY};
 
 /// Index of the swarm in a problem state list.
@@ -12,7 +14,7 @@ pub const DEPOT: usize = 0;
 // ========================================================================= //
 
 /// The mission plan of a single chaser.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ChaserPlan {
     /// State indices visited, starting at [`DEPOT`].
     pub sequence: Vec<usize>,
@@ -91,7 +93,7 @@ impl ChaserPlan {
 }
 
 /// Mission plan containing all individual chaser plans.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct MissionPlan {
     /// The individual chaser plans (idle plans included).
     pub plans: Vec<ChaserPlan>,
