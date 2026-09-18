@@ -91,7 +91,7 @@ Planner.solve(problem)
 ```
 
 | Layer | Default implementations |
-|---|---|---|
+|---|---|
 | `TransferLayer` | `QlawTransfer` |
 | `ScheduleLayer` | `DpSchedule` |
 | `SequenceLayer` | `HgsSequence` |
