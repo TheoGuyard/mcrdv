@@ -1,0 +1,25 @@
+# Selection only. How each figure is drawn lives in plot.py -- resampling,
+# switching between curves and bars, reading a plan leg by leg are not things a
+# configuration language should be asked to express.
+source: results
+
+figures:
+  - name: cost
+    # Which records this figure is about.
+    select: {feasible: true}
+    group_by: num_targets
+    value: cost
+    reduce: median+iqr
+    x_scale: log
+    y_scale: log
+    xlabel: targets
+    ylabel: mission cost
+    xname: targets
+
+  - name: by_planner
+    group_by: sequence.type
+    value: cost
+    reduce: median+iqr
+    xlabel: planner
+    ylabel: mission cost
+    xname: planner_index

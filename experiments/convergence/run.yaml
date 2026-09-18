@@ -1,0 +1,21 @@
+# One run of the convergence experiment.
+#
+# `log_save` is what fills `HgsSequence.trace`, and it is what makes this an
+# experiment about convergence rather than about cost. It is independent of
+# `verbose`, so the run records its whole history without printing a line.
+name: convergence
+description: Incumbent cost against elapsed search time.
+
+seed: 0
+
+instance: {name: iridium33, num_chasers: 15, max_load: 8, max_time: 365d}
+
+transfer: {type: qlaw}
+schedule: {type: dp}
+sequence:
+  type: hgs
+  preset: 5
+  config:
+    max_time: 3m
+    log_save: true
+    log_iter: 1

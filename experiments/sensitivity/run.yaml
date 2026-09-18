@@ -1,0 +1,14 @@
+# One run of the sensitivity experiment: the point the sweeps vary from.
+name: sensitivity
+description: One-at-a-time sweeps over the search and layer parameters.
+
+seed: 0
+
+instance: {name: iridium33, num_chasers: 15, max_load: 8, max_time: 365d}
+
+transfer: {type: qlaw}
+schedule: {type: dp, grid_size: 32, use_hints: true}
+sequence:
+  type: hgs
+  preset: 4
+  config: {max_time: 1m}

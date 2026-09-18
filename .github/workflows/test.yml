@@ -2,9 +2,19 @@ on: push
 name: Test
 
 jobs:
-  test:
+  pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v6
-      - name: Run test
-        run: cargo test
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package
+        run: pip install -e ".[dev]"
+      - name: Run pytest
+        run: pytest

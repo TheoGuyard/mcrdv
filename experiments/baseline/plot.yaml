@@ -1,0 +1,21 @@
+source: results
+
+figures:
+  # Absolute costs differ by an order of magnitude between catalogues, so
+  # plotting them together would say nothing but "big instances cost more".
+  # plot.py turns these into a gap against the best found per instance.
+  - name: gap
+    group_by: instance.name
+    value: cost
+    reduce: median+iqr
+    xlabel: instance
+    ylabel: gap to best [%]
+    xname: instance_index
+
+  - name: usage
+    group_by: instance.name
+    value: active_chasers
+    reduce: median+iqr
+    xlabel: instance
+    ylabel: chasers used
+    xname: instance_index

@@ -1,0 +1,87 @@
+# One figure per swept axis. `sweep.axis` and `sweep.value` are written into
+# each generated configuration by `generate.one_at_a_time`, so a figure is just
+# a filter on which knob moved.
+source: results
+
+figures:
+  - name: crossover
+    select: {sweep.axis: sequence.config.crossover}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: crossover
+    ylabel: cost above best [%]
+    xname: crossover
+
+  - name: ordering
+    select: {sweep.axis: sequence.config.ordering}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: giant-tour ordering
+    ylabel: cost above best [%]
+    xname: ordering
+
+  - name: generation
+    select: {sweep.axis: sequence.config.generation}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: initial population
+    ylabel: cost above best [%]
+    xname: generation
+
+  - name: nb_neighbors
+    select: {sweep.axis: sequence.config.nb_neighbors}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: neighbours per target
+    ylabel: cost above best [%]
+    xname: nb_neighbors
+
+  - name: pop_max
+    select: {sweep.axis: sequence.config.pop_max}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: maximum population
+    ylabel: cost above best [%]
+    xname: pop_max
+
+  # `grid_size` trades the resolution of the departure grid against the cost of
+  # tabulating it, and is the one knob that changes what a plan can be, not just
+  # how it is found.
+  - name: grid_size
+    select: {sweep.axis: schedule.grid_size}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: departure grid steps
+    ylabel: cost above best [%]
+    xname: grid_size
+
+  - name: use_hints
+    select: {sweep.axis: schedule.use_hints}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: merge transfer hints
+    ylabel: cost above best [%]
+    xname: use_hints
+
+  - name: allow_waiting
+    select: {sweep.axis: schedule.allow_waiting}
+    group_by: sweep.value
+    value: cost
+    reduce: median+iqr
+    xlabel: waiting allowed
+    ylabel: cost above best [%]
+    xname: allow_waiting
+
+  # Everything at once, as what it costs against what it takes.
+  - name: cost_vs_time
+    reduce: raw
+    xlabel: search time [s]
+    ylabel: mission cost
+    xname: search_time

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcrdv"
+version = "0.1.0"
+description = "`mcrdv` -- Multi-chaser rendezvous planning software."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24", "numba>=0.59"]
+
+[project.optional-dependencies]
+dev = ["black", "pytest>=7"]
+experiments = ["pyyaml>=6", "matplotlib>=3.8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -2,9 +2,14 @@ on: push
 name: Lint
 
 jobs:
-  lint:
+  black:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Run fmt
-        run: cargo fmt --all -- --check
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install black
+        run: pip install black
+      - name: Run black
+        run: black --check --diff . -l 79

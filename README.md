@@ -1,93 +1,108 @@
-# mcrdv — Multi-Chaser Rendezvous
+# mcrdv — Multi-chaser rendezvous planning software
 
-`mcrdv` is a **multi-chaser rendrezvous** mission planner: given a
-orbital states to visit and a swarm of chaser spacecraft, it decides *which*
-chaser visit *which* state, *in what order*, and *when* it departs, so that
-all orbital states are visited at the lowest possible mission cost.
+`mcrdv` is a Python package to plan multi-chaser rendezvous missions in orbit. It allows planning a mission for a swarm of chasers that must visit a list of targets. Various operational constraints and objectives can be integrated during the planning process. `mcrdv` is designed to be **fast**, **ergonomic**, and **easy to extend** to facilitates its integration in real-world mission design workflows.
 
-The package is:
-- **Efficient -** Datasets up to thousands of orbital states and swarms with tens of chasers can be solved within minutes.
-- **Flexible -** Custom implementation can be used to define the underlying orbital dynamics, as well as the mission operational constraints and objective.
-- **Modular -** The solver is built as a stack of layers to construct the mission plan, each of which can be replaced with a custom implementation.
+## Installation
+
+`mcrdv` can be installed as follows:
+
+```bash
+git clone https://github.com/TheoGuyard/mcrdv.git
+cd mcrdv
+pip install -e .
+```
+
+Python `3.11+` is required. Use `pip install -e ".[dev]"` to install development dependencies for, and `pip install -e ".[experiments]"` to install experiments dependencies.
 
 ## Quickstart
 
-```rust
-use std::rc::Rc;
-use mcrdv::{centroid, format_mission, read_debris, DAY};
-use mcrdv::{DpSchedule, HgsSequence, Problem, QlawTransfer, Solver};
+The basic workflow of `mcrdv` is as follows:
 
-// Load a debris catalogue.
-let path = "data/iridium33.csv";
-let debris = read_debris(path);
-println!("Loaded {} debris from {path}", debris.len());
+```python
+from mcrdv import DAY, Planner, Problem, centroid, load_states
 
-// Index 0 is the orbit the chasers depart from, by convention.
-let mut states = vec![centroid(&debris)];
-states.extend(debris);
+# 1. Load a catalogue of targets (Keplerian elements, one row per object).
+targets = load_states("data/iridium33.csv")
 
-// Define the instance and its operational limits.
-let problem = Rc::new(Problem::new(
+# 2. Add the depot, where the chasers start. By convention it is state 0.
+states = [centroid(targets)] + targets
+
+# 3. Describe the mission and its operational limits.
+problem = Problem(
     states,
-    15,           // chasers in the swarm
-    365.0 * DAY,  // per-chaser mission duration limit
-    10,           // per-chaser debris capacity
-));
-println!("{problem}");
+    num_chasers=15,          # chasers available at the depot
+    max_time=365.0 * DAY,    # mission duration limit per chaser [s]
+    max_load=10,             # targets a chaser can collect
+)
 
-// Build the solver layer stack from the bottom up.
-let transfer = QlawTransfer::new();
-let schedule = DpSchedule::new(transfer);
-let sequence = HgsSequence::new(schedule);
-let mut solver = Solver::new(sequence);
+# 4. Stack the three layers in the mission `Planner`.
+planner = Planner()
 
-// Solver the problem
-let mission = solver.solve(&problem);
-
-println!("{}", format_mission(&problem, &mission));
+# 5. Solve, inspect, save.
+mission = planner.solve(problem)
+print(mission)
+mission.save("mission.csv")
 ```
 
-A CSV with one debris per row, six Keplerian elements. The header is mandatory
-and checked:
+```text
+Initializing layers...
+Layers initialized in 8.80 seconds          <- Numba compilation, once per process
+Planning mission...
+...
+====================== Mission plan ======================
+Feasible     : True
+Total cost   : 114492.8
+Chasers used : 13/15
 
-```
-a[m],e[prop],i[rad],r[rad],o[rad],t[rad]
-7164040.5518,0.0019,1.5079,2.8765,0.8909,5.3923
-```
-
-Semi-major axis `a` [m], eccentricity `e`, inclination `i` [rad], RAAN `r`
-[rad], argument of perigee `o` [rad], true anomaly `t` [rad]. The secular $J_2$
-drift rates are derived on construction and carried through propagation.
-
-Five catalogues ship in `data/`: `odrc` (13), `cosmos1408` (4), `iridium33`
-(110), `cosmos2251` (583) and `fengyun1C` (1847).
-
-## Extending
-
-Implement the trait for the layer you want to replace and nest it in the stack:
-
-```rust
-use mcrdv::TransferLayer;
-
-struct MyTransfer { /* ... */ }
-
-impl TransferLayer for MyTransfer {
-    fn initialize(&mut self, problem: &Problem) { /* ... */ }
-    fn evaluate(&self, i: usize, j: usize, t: f64) -> (f64, f64) { /* ... */ }
-    fn evaluate_lb(&self, i: usize, j: usize, t: f64) -> (f64, f64) { /* ... */ }
-    fn hints(&self, i: usize, j: usize, t: f64) -> Vec<f64> { /* ... */ }
-}
+Chaser 0 (feasible: True, cost: 64.4)
+  src    dst             arrive       depart      leg cost
+  0      19                  --    3003428.6          0.00
+  19     94           3013785.5   22525714.3         31.07
+  94     --          22536822.3           --         33.32
+...
 ```
 
-## Tests
+Each `ChaserPlan` in `mission.plans` holds the visited `sequence` (starting at the depot), the `depart` and `arrive` times in seconds, the leg `costs`, and its totals `cost` and `time`. By default, a leg's cost is its estimated `Δv` in `m/s`.
 
-Tests can be run as follows:
+## Package design
 
-```bash
-cargo test --release
-cargo clippy --all-targets
+### Modules
+
 ```
+src/mcrdv/
+├── problem.py        Problem instance, ChaserPlan, and MissionPlan
+├── orbit.py          Orbital state representation and utilities
+├── io.py             I/O to load and save states
+├── planner.py        Planner and the transfer/schedule/sequence layer classes
+├── kernel.py         Compilation utilities
+├── transfer/         Concrete implementations of transfer layers
+├── schedule/         Concrete implementations of schedule layers
+└── sequence/         Concrete implementations of sequence layers
+```
+
+### The layer decomposition
+
+`mcrdv` splits the mission planning task into three **layers** as follows:
+```
+Planner.solve(problem)
+└── SequenceLayer           Which targets does each chaser visit, and in what order?
+    └── ScheduleLayer       When should the chaser leave each target in a fixed sequence to visit?
+        └── TransferLayer   What is the time and cost of a transfer between two targets at a given time?
+```
+
+| Layer | Default implementations |
+|---|---|---|
+| `TransferLayer` | `QlawTransfer` |
+| `ScheduleLayer` | `DpSchedule` |
+| `SequenceLayer` | `HgsSequence` |
+
+A few things make the stack fast and easy to recombine:
+
+- **Plug and play.** Each layer can be replaced with custom implementation and easily integrated to the `Planner`.
+- **Bounds and hints.** Layers can expose information to help the other layers in their optimization task.
+- **Caching.** The layers can cache results to avoid useless re-evaluations.
+- **Compiled kernels.** Layers can be compiled with `numba` to deliver high performance.
 
 ## License
 
-This project is distributed under the [MIT license](LICENSE).
+`mcrdv` is released under [MIT License](LICENSE).

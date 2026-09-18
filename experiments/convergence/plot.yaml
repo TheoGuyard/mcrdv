@@ -1,0 +1,16 @@
+source: results
+
+figures:
+  - name: iridium33
+    select: {instance.name: iridium33}
+    reduce: raw
+    xlabel: elapsed [s]
+    ylabel: incumbent cost
+    xname: elapsed
+
+  - name: cosmos2251
+    select: {instance.name: cosmos2251}
+    reduce: raw
+    xlabel: elapsed [s]
+    ylabel: incumbent cost
+    xname: elapsed

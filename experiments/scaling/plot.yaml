@@ -1,0 +1,25 @@
+source: results
+
+figures:
+  - name: cost
+    group_by: num_targets
+    value: cost
+    reduce: median+iqr
+    x_scale: log
+    y_scale: log
+    xlabel: targets
+    ylabel: mission cost
+    xname: targets
+
+  # Setup and search are drawn apart on purpose: the search runs to a fixed
+  # budget, so any growth in the total is the quadratic bound table, and showing
+  # them summed would hide exactly the term that scales.
+  - name: time
+    group_by: num_targets
+    value: t_setup
+    reduce: median+iqr
+    x_scale: log
+    y_scale: log
+    xlabel: targets
+    ylabel: wall clock [s]
+    xname: targets
