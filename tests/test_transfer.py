@@ -346,7 +346,7 @@ def test_a_pure_python_transfer_layer_satisfies_the_contract(iridium):
 
 def test_the_inherited_defaults_read_the_layers_own_sampling_knobs(iridium):
     transfer = ConstantTransfer()
-    assert (transfer.num_samples, transfer.num_hints) == (64, 16)
+    assert (transfer.num_samples, transfer.num_hints) == (512, 64)
     transfer = ConstantTransfer(num_samples=4, num_hints=2)
     transfer.initialize(iridium)
     assert (transfer.kernel().num_samples, transfer.kernel().num_hints) == (
