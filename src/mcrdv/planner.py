@@ -74,16 +74,16 @@ class TransferLayer(ABC):
     problem: Problem | None = None
 
     # Parameters controlling the default implementations and caching.
-    num_samples: int = 64
-    num_hints: int = 16
+    num_samples: int = 512
+    num_hints: int = 64
     use_cache: bool = False
     use_cache_lb: bool = True
 
     def __init__(
         self,
         *,
-        num_samples: int = 64,
-        num_hints: int = 16,
+        num_samples: int = 512,
+        num_hints: int = 64,
         use_cache: bool = False,
         use_cache_lb: bool = True,
     ) -> None:
