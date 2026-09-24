@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from common import analysis, driver, planners  # noqa: E402
+from _common import analysis, driver, planners  # noqa: E402
 
 
 def execute(config: dict) -> dict:
@@ -21,11 +21,21 @@ def execute(config: dict) -> dict:
     problem = planners.problem(config)
     result.update(analysis.mission_metrics(result["mission"], problem))
     result["chasers"] = analysis.per_chaser(result["mission"], problem)
-    # The assignment figure needs the catalogue's drift, which only exists here:
+    # The assignment figures need the catalogue's drift, which only exists here:
     # a plotting script has the mission plan but not the orbits behind it, and
-    # rebuilding them from the record would mean re-reading the catalogue.
-    result["raan"] = analysis.raan_tracks(problem)
+    # rebuilding them from the record would mean re-reading the catalogue. Every
+    # element is kept, so which one a figure draws stays a plot.yaml decision
+    # rather than something a run has to be repeated for.
+    result["tracks"] = {
+        element: analysis.tracks(problem, element)
+        for element in analysis.ELEMENTS
+    }
     result["visits"] = analysis.visits(result["mission"], problem)
+    # The plan seen in time, and the spread of what its legs cost: both are
+    # read off the mission plan alone, and both are what the structure figures
+    # are about.
+    result["timeline"] = analysis.timeline(result["mission"])
+    result["legs"] = analysis.legs(result["mission"])
     return result
 
 

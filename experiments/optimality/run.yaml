@@ -1,0 +1,19 @@
+name: optimality
+description: Sequence layer against the exact optimum sequencing (small instances only).
+
+seed: 0
+
+instance:
+  name: odrc
+  num_chasers: 2
+  max_load: 10
+  max_time: 365d
+
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule: {type: dp}
+    sequence:
+      type: hgs
+      args: {preset: 3, max_time: 1m}

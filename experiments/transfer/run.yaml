@@ -1,0 +1,32 @@
+# One run of the transfer experiment: one cost oracle, and the plan it leads to.
+#
+# Only `solver.args.transfer` changes across this experiment. The schedule
+# layer, the search and the solver itself are the same in every run, which is
+# the whole claim: what a mission is trying to achieve, and what it may not do,
+# is written in the transfer layer and nowhere else -- and the plans that come
+# back differ in structure, not merely in score.
+name: transfer
+description: How the transfer layer's definition shapes a mission plan.
+
+seed: 0
+
+# Which arm of the campaign this run belongs to, and what the figures select
+# on: `oracles` compares the four definitions, `weights` traces one of them
+# across a range of prices. A run by hand is one of the four.
+study: oracles
+
+instance: {name: iridium33, num_chasers: 15, max_load: 10, max_time: 365d}
+
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule: {type: dp}
+    sequence:
+      type: hgs
+      args: {preset: 5, max_time: 2m}
+
+metrics:
+  hazard_share: 0.33
+  blackout_period: 10d
+  blackout_duration: 3d

@@ -8,16 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from common import export, plotting, tidy  # noqa: E402
+from _common import export, plotting, tidy  # noqa: E402
 
 
 def _segments(values, keep):
-    """`values` with everything outside `keep` blanked out.
-
-    Drawing one curve in two styles means drawing it twice, each copy holding
-    NaN where the other takes over. The boundary point belongs to both, so the
-    styles meet instead of leaving a gap.
-    """
+    """`values` with everything outside `keep` blanked out."""
     out = np.where(keep, values, np.nan)
     edges = np.flatnonzero(keep[:-1] != keep[1:])
     for edge in edges:
@@ -27,19 +22,7 @@ def _segments(values, keep):
 
 
 def convergence(ax, data):
-    """Median incumbent against time, with the spread across seeds.
-
-    Each run logs on its own clock, so the traces are read onto one common grid
-    before being reduced. They are staircases -- the incumbent holds until it
-    improves -- so the resampling carries values forward rather than
-    interpolating, which would invent improvements that never happened.
-
-    The early part of a search has no feasible plan at all, and its "cost" is
-    the cost of something that overruns a limit -- not comparable with what
-    comes later. That stretch is drawn dashed. The line only goes solid once
-    *every* replication has found a feasible plan: it summarises all of them, so
-    calling it feasible while some are not is the misleading direction.
-    """
+    """Median incumbent against time, with the spread across seeds."""
     runs = [r for r in data.records if r.result.get("trace")]
     if not runs:
         return
@@ -53,8 +36,6 @@ def convergence(ax, data):
         for r in runs
     ]
 
-    # Stop at the first run's end, so every point of the band is backed by every
-    # seed rather than thinning out as the longer runs carry on alone.
     horizon = min(max(times) for times, _, _ in curves)
     grid = np.linspace(0.0, horizon, 200)
     cost = np.vstack([tidy.resample(t, c, grid) for t, c, _ in curves])
@@ -89,10 +70,8 @@ def convergence(ax, data):
     ax.set_title(f"{len(curves)} seeds")
 
 
-# Every figure in this experiment is the same drawing over a different
-# selection, which the configuration already expresses.
-FIGURES = {"iridium33": convergence, "cosmos2251": convergence}
+DRAW_MAP = {"convergence": convergence}
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, FIGURES))
+    raise SystemExit(plotting.main(__file__, DRAW_MAP))

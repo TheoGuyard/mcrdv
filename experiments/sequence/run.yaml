@@ -1,0 +1,29 @@
+# One run of the sequence experiment: one preset of the search, on one
+# catalogue. The campaign is this run over every preset and every catalogue it
+# is worth asking about.
+#
+# The preset is written explicitly and never left out: a configuration that
+# names none gets the search's own defaults, which are preset 4's, and a run of
+# this experiment that did not say which level it searched at would be a point
+# on the curve with no abscissa.
+name: sequence
+description: What a preset of the search costs in time, and what it buys.
+
+seed: 0
+
+instance: {name: iridium33, num_chasers: 15, max_load: 10, max_time: 365d}
+
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule: {type: dp}
+    sequence:
+      type: hgs
+      args:
+        preset: 4
+        # The deepest presets will not exhaust their iterations on a large
+        # catalogue inside any budget a campaign can afford, so there is a cap
+        # and the record says whether a run hit it. A point at the cap is the
+        # cap speaking rather than the preset.
+        max_time: 10m

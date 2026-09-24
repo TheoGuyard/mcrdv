@@ -1,16 +1,15 @@
-source: results
+source:
+  folder: results
+  select:
+    instance.name: cosmos2251
+    instance.num_chasers: 80
+    instance.max_load: 10
+    instance.max_time: 365d
 
 figures:
-  - name: iridium33
-    select: {instance.name: iridium33}
+  - name: convergence
+    draw: convergence
     reduce: raw
-    xlabel: elapsed [s]
-    ylabel: incumbent cost
-    xname: elapsed
-
-  - name: cosmos2251
-    select: {instance.name: cosmos2251}
-    reduce: raw
-    xlabel: elapsed [s]
-    ylabel: incumbent cost
+    xlabel: running time [s]
+    ylabel: mission cost
     xname: elapsed

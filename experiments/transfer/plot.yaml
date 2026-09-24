@@ -1,0 +1,95 @@
+# Every figure reads the structure of the plans rather than their score:
+# `legs` and `chasers` in each record hold the plan itself, re-priced on the
+# one scale the oracles share.
+#
+# `study` says which arm of the campaign a run belongs to -- the four oracles
+# side by side, or the sweep over the weight on time -- so that the comparison
+# figures are not fed the twenty-five runs that exist only to trace the sweep.
+source:
+  folder: results
+  select: {instance.name: iridium33}
+
+figures:
+  # The mission's shape in time: what fills the horizon, and what empties it.
+  - name: progress
+    draw: progress
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: time [days]
+    ylabel: targets collected
+    xname: days
+
+  # What a chaser's mission is made of.
+  - name: rhythm
+    draw: rhythm
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: what a transfer costs
+    ylabel: days per active chaser
+    xname: oracle
+
+  # How long one pause lasts. Blackout waits stop where a window closes.
+  - name: waits
+    draw: waits
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: one wait [days]
+    ylabel: share of legs at or below [%]
+    xname: wait_days
+
+  # What one transfer costs, where the bill for hurrying turns up.
+  - name: legs
+    draw: legs
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: leg delta-v [m/s]
+    ylabel: share of legs at or below [%]
+    xname: leg_dv
+
+  # Whether the oracle changed which targets are grouped together.
+  - name: spread
+    draw: spread
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: spread of a chaser's targets in RAAN [deg]
+    ylabel: share of chasers at or below [%]
+    xname: spread_deg
+
+  # How many chasers are used, and how full each of them is.
+  - name: load
+    draw: load
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: chasers, heaviest first
+    ylabel: targets collected
+    xname: rank
+
+  # Where in a tour the hazardous objects end up.
+  - name: priority
+    draw: priority
+    source: {select: {study: oracles}}
+    reduce: raw
+    xlabel: what a transfer costs
+    ylabel: mean position in the tour
+    xname: oracle
+
+  # Departures against the window they may not fall in.
+  - name: blackout
+    draw: blackout
+    source: {select: {study: oracles, oracle: [fuel, blackout]}}
+    reduce: raw
+    xlabel: phase within the cycle [days]
+    ylabel: departures
+    xname: phase_days
+
+  # The same oracle at a range of weights: the plan restructuring itself as
+  # time gets more expensive. Reads both arms -- the delta-v-only plan is the
+  # reference every ratio is taken against, and it lives in the other one.
+  - name: weighting
+    draw: weighting
+    source: {select: {oracle: [fuel, arrival]}}
+    reduce: raw
+    x_scale: log
+    xlabel: weight on arrival time [m/s per day]
+    ylabel: relative to the delta-v-only plan
+    xname: weight

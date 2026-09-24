@@ -1,87 +1,72 @@
-# One figure per swept axis. `sweep.axis` and `sweep.value` are written into
-# each generated configuration by `generate.one_at_a_time`, so a figure is just
-# a filter on which knob moved.
-source: results
+# One block of figures per swept parameter. `sweep.axis` selects the runs that
+# moved that parameter -- the campaign tags every run with it -- and `group_by`
+# names the column holding what it was moved to, which `run.py` records as a
+# number so every axis is a curve rather than a row of bars.
+#
+# Three questions of each parameter: what it costs to solve (`time`), what the
+# mission costs (`cost`), and what the plan looks like (`structure`).
+source:
+  folder: results
 
 figures:
-  - name: crossover
-    select: {sweep.axis: sequence.config.crossover}
-    group_by: sweep.value
+  # ---------------------------------------------------------------- debris --
+  - name: time_debris
+    draw: time
+    source: {select: {sweep.axis: instance.num_targets}}
+    group_by: num_targets
+    value: t_setup
+    reduce: median+iqr
+    y_scale: log
+    xlabel: debris
+    ylabel: wall clock [s]
+    xname: targets
+
+  - name: cost_per_target_debris
+    draw: cost
+    source: {select: {sweep.axis: instance.num_targets}}
+    group_by: num_targets
+    value: cost_per_target
+    reduce: median+iqr
+    xlabel: debris
+    ylabel: mission cost per target
+    xname: targets
+
+  - name: throughput_debris
+    draw: throughput
+    source: {select: {sweep.axis: instance.num_targets}}
+    group_by: num_targets
+    value: throughput
+    reduce: median+iqr
+    xlabel: debris
+    ylabel: iterations per second
+    xname: targets
+
+  - name: cost_spread
+    draw: cost
+    source: {select: {sweep.axis: instance.cloud.kick}}
+    group_by: spread_deg
     value: cost
     reduce: median+iqr
-    xlabel: crossover
-    ylabel: cost above best [%]
-    xname: crossover
-
-  - name: ordering
-    select: {sweep.axis: sequence.config.ordering}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: giant-tour ordering
-    ylabel: cost above best [%]
-    xname: ordering
-
-  - name: generation
-    select: {sweep.axis: sequence.config.generation}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: initial population
-    ylabel: cost above best [%]
-    xname: generation
-
-  - name: nb_neighbors
-    select: {sweep.axis: sequence.config.nb_neighbors}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: neighbours per target
-    ylabel: cost above best [%]
-    xname: nb_neighbors
-
-  - name: pop_max
-    select: {sweep.axis: sequence.config.pop_max}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: maximum population
-    ylabel: cost above best [%]
-    xname: pop_max
-
-  # `grid_size` trades the resolution of the departure grid against the cost of
-  # tabulating it, and is the one knob that changes what a plan can be, not just
-  # how it is found.
-  - name: grid_size
-    select: {sweep.axis: schedule.grid_size}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: departure grid steps
-    ylabel: cost above best [%]
-    xname: grid_size
-
-  - name: use_hints
-    select: {sweep.axis: schedule.use_hints}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: merge transfer hints
-    ylabel: cost above best [%]
-    xname: use_hints
-
-  - name: allow_waiting
-    select: {sweep.axis: schedule.allow_waiting}
-    group_by: sweep.value
-    value: cost
-    reduce: median+iqr
-    xlabel: waiting allowed
-    ylabel: cost above best [%]
-    xname: allow_waiting
-
-  # Everything at once, as what it costs against what it takes.
-  - name: cost_vs_time
-    reduce: raw
-    xlabel: search time [s]
+    xlabel: spread of the cloud in RAAN [deg]
     ylabel: mission cost
-    xname: search_time
+    xname: spread_deg
+
+  - name: cost_horizon
+    draw: cost
+    source: {select: {sweep.axis: instance.max_time}}
+    group_by: horizon_days
+    value: cost
+    reduce: median+iqr
+    xlabel: mission horizon [days]
+    ylabel: mission cost
+    xname: horizon_days
+
+  - name: cost_load
+    draw: cost
+    source: {select: {sweep.axis: instance.max_load}}
+    group_by: max_load
+    value: cost
+    reduce: median+iqr
+    xlabel: targets per chaser
+    ylabel: mission cost
+    xname: max_load

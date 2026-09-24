@@ -1,14 +1,42 @@
-# One run of the sensitivity experiment: the point the sweeps vary from.
+# One run of the sensitivity experiment: one instance, solved once. The
+# campaign is this run with one parameter of it moved at a time.
+#
+# The instance is generated rather than a catalogue, which is the whole reason
+# this experiment can ask the question it asks: a shipped catalogue comes as a
+# package, and its size, its spread and its altitude change together from one
+# to the next. A cloud changes one thing at a time, and a cloud of `n` targets
+# is the first `n` fragments of every larger cloud of the same draw -- so a
+# size sweep adds debris to one cloud rather than comparing different ones.
 name: sensitivity
-description: One-at-a-time sweeps over the search and layer parameters.
+description: One instance parameter at a time, on generated debris clouds.
 
 seed: 0
 
-instance: {name: iridium33, num_chasers: 15, max_load: 8, max_time: 365d}
+instance:
+  name: synthetic
+  # The five swept parameters, at the values everything is read against. The
+  # capacity rule `num_chasers x max_load >= num_targets` is checked when the
+  # problem is built, so a sweep may not take any of the three below the line
+  # where 200 targets stop fitting in the swarm.
+  num_targets: 200
+  num_chasers: 40
+  max_load: 10
+  max_time: 365d
+  draw: 0
+  cloud:
+    altitude_km: 850
+    inclination_deg: 98.8
+    # How hard the break-up was, in m/s of velocity kick per axis: the knob
+    # that sets how far the fragments spread in right ascension, which is what
+    # a transfer mostly pays for.
+    kick: 50
+    age: 3y
 
-transfer: {type: qlaw}
-schedule: {type: dp, grid_size: 32, use_hints: true}
-sequence:
-  type: hgs
-  preset: 4
-  config: {max_time: 1m}
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule: {type: dp}
+    sequence:
+      type: hgs
+      args: {preset: 5, max_time: 2m}

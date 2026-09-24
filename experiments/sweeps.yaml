@@ -1,0 +1,160 @@
+defaults:
+  account: def-vidalthi
+  walltime: "01:00:00"
+  memory: 8G
+  cpus: 8
+  tasks: 1
+
+common:
+  # instances
+  iridium33: &iridium33
+    name: iridium33
+    num_chasers: 15
+    max_load: 10
+    max_time: 365d
+  cosmos2251: &cosmos2251
+    name: cosmos2251
+    num_chasers: 80
+    max_load: 10
+    max_time: 365d
+  fengyun1C: &fengyun1C
+    name: fengyun1C
+    num_chasers: 250
+    max_load: 10
+    max_time: 365d
+  # solvers
+  mcrdv: &mcrdv
+    type: mcrdv
+    args:
+      transfer: {type: qlaw}
+      schedule: {type: dp}
+      sequence: {type: hgs, args: {preset: 5}}
+
+sweeps:
+
+  convergence:
+    walltime: "01:30:00"
+    memory: 64G
+    tasks: 20
+    base:
+      name: convergence
+      description: Incumbent cost against elapsed search time.
+      seed: 0
+      instance: *iridium33
+      solver: *mcrdv
+    set:
+      solver.args.sequence.args.max_time: 1h
+      solver.args.sequence.args.log_save: true
+      solver.args.sequence.args.log_iter: 10
+    campaign:
+      - axes:
+          instance:
+            # - *iridium33
+            - *cosmos2251
+            - *fengyun1C
+          seed: {range: 10}
+
+  schedule:
+    walltime: "00:30:00"
+    memory: 16G
+    tasks: 4
+    base:
+      name: schedule
+      description: The schedule layer's quality and cost, measured alone.
+      seed: 0
+      instance: *iridium33
+      solver: *mcrdv
+      bank: {lengths: [2, 4, 8, 12, 16], per_length: 20, width: 10}
+      reference:
+        type: dp
+        args: {grid_size: 4096, use_hints: true, allow_waiting: true}
+      repeats: 3
+    set:
+      solver.args.schedule.args.grid_size: 32
+      solver.args.schedule.args.use_hints: true
+      solver.args.schedule.args.allow_waiting: true
+    campaign:
+      - axes:
+          set:
+            - {solver.args.schedule.args.use_hints: false}
+            - {solver.args.schedule.args.use_hints: true}
+          solver.args.schedule.args.grid_size:
+            [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+          seed: {range: 10}
+      - axes:
+          set: [{solver.args.schedule.args.allow_waiting: false}]
+          seed: {range: 10}
+
+  sensitivity:
+    walltime: "02:00:00"
+    memory: 16G
+    tasks: 24
+    base:
+      name: sensitivity
+      description: One instance parameter at a time, on generated clouds.
+      seed: 0
+      instance:
+        name: synthetic
+        num_targets: 200
+        num_chasers: 40
+        max_load: 10
+        max_time: 365d
+        draw: 0
+        cloud: {altitude_km: 850, inclination_deg: 98.8, kick: 50, age: 3y}
+      solver: *mcrdv
+    set:
+      solver.args.sequence.args.max_time: 10m
+    campaign:
+      - mode: one_at_a_time
+        axes:
+          instance.num_targets: [50, 100, 150, 200, 250, 300, 350, 400]
+          instance.cloud.kick: [10, 25, 50, 75, 100, 125, 150, 175, 200]
+          instance.num_chasers: [20, 30, 40, 50, 60, 70, 80]
+          instance.max_time: [91d, 183d, 274d, 365d, 456d, 545d, 639d, 730d]
+          instance.max_load: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+          seed: {range: 5}
+
+  sequence:
+    walltime: "02:00:00"
+    memory: 16G
+    tasks: 5
+    base:
+      name: sequence
+      description: What a preset of the search costs in time, and what it buys.
+      seed: 0
+      instance: *iridium33
+      solver: *mcrdv
+    set:
+      solver.args.sequence.args.max_time: 10m
+    campaign:
+      - axes:
+          solver.args.sequence.args.preset: [0, 1, 2, 3, 4, 5, 6]
+          seed: {range: 5}
+
+  transfer:
+    walltime: "01:30:00"
+    memory: 8G
+    tasks: 6
+    base:
+      name: transfer
+      description: How the transfer layer's definition shapes a mission plan.
+      seed: 0
+      instance: *iridium33
+      solver: *mcrdv
+      metrics:
+        hazard_share: 0.33
+        blackout_period: 10d
+        blackout_duration: 3d
+    set:
+      solver.args.sequence.args.max_time: 2m
+    campaign:
+      - axes:
+          set: [{study: oracles}]
+          solver.args.transfer:
+            - {type: qlaw}
+            - {type: qlaw_arrival, args: {factor_time: 5.787037e-5}}
+            - {type: qlaw_urgency, args: {weight: 20.0, share: 0.33}}
+            - {type: qlaw_blackout, args: {period: 10d, duration: 3d}}
+            - {type: qlaw_embargo, args: {start: 50d}}
+          seed: {range: 5}
+

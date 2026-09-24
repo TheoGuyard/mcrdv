@@ -1,0 +1,40 @@
+source: results
+
+figures:
+  - name: pareto
+    draw: pareto
+    source: {select: {instance.name: iridium33}}
+    reduce: raw
+    x_scale: log
+    y_scale: log
+    xlabel: time per call [us]
+    ylabel: mean gap to reference [%]
+    xname: time_us
+
+  - name: gap
+    draw: gap
+    source: {select: {instance.name: iridium33}}
+    reduce: raw
+    x_scale: log
+    y_scale: log
+    xlabel: departure grid steps
+    ylabel: mean gap to reference [%]
+    xname: grid_size
+
+  - name: time
+    draw: time
+    source: {select: {instance.name: iridium33}}
+    reduce: raw
+    x_scale: log
+    y_scale: log
+    xlabel: departure grid steps
+    ylabel: time [us]
+    xname: grid_size
+
+  - name: length
+    draw: length
+    source: {select: {instance.name: iridium33, solver.args.schedule.args.grid_size: 32}}
+    reduce: raw
+    xlabel: legs per sequence
+    ylabel: time per call [us]
+    xname: legs

@@ -1,0 +1,31 @@
+name: schedule
+description: The schedule layer quality and performance.
+
+seed: 0
+
+instance:
+  name: iridium33
+  num_chasers: 15
+  max_load: 10
+  max_time: 365d
+
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule:
+      type: dp
+      args: {grid_size: 32, use_hints: true, allow_waiting: true}
+
+# The sequences to schedule: `per_length` walks from the depot for each length
+# (targets, the depot excluded). Each step draws the next target among the
+# `width` cheapest to reach by the per-leg bound -- the neighbours a search
+# would try -- or among all remaining ones when `width` is 0.
+bank: {lengths: [2, 4, 8, 12, 16], per_length: 20, width: 10}
+
+reference:
+  type: dp
+  args: {grid_size: 4096, use_hints: true, allow_waiting: true}
+
+# Warm passes over the bank; each call keeps its fastest time.
+repeats: 3

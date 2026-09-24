@@ -1,19 +1,19 @@
-# One run of the showcase experiment.
-#
-# The other four experiments measure how well the planner does. This one asks
-# what it decided: how the work is shared between chasers, how long they idle,
-# how the cost is spread over legs, and how each chaser's targets sit in right
-# ascension. The whole mission plan is kept in the record.
 name: showcase
 description: Structure of a representative mission plan.
 
 seed: 0
 
-instance: {name: iridium33, num_chasers: 15, max_load: 8, max_time: 365d}
+instance:
+  name: iridium33
+  num_chasers: 15
+  max_load: 10
+  max_time: 365d
 
-transfer: {type: qlaw}
-schedule: {type: dp}
-sequence:
-  type: hgs
-  preset: 5
-  config: {max_time: 5m}
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw}
+    schedule: {type: dp}
+    sequence:
+      type: hgs
+      args: {preset: 5, max_time: 1h, verbose: true}

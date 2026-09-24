@@ -1,0 +1,23 @@
+source:
+  folder: results
+  select:
+    instance.name: odrc
+    instance.num_chasers: 2
+    instance.max_load: 10
+    instance.max_time: 365d
+
+figures:
+  - name: gap
+    draw: gap
+    reduce: raw
+    xlabel: targets
+    ylabel: mean gap to optimum [%]
+    xname: targets
+
+  - name: optimal
+    draw: optimal
+    reduce: raw
+    xlabel: targets
+    ylabel: runs at the optimum [%]
+    xname: targets
+

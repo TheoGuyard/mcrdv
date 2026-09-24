@@ -1,36 +1,53 @@
-# Every figure here describes one plan rather than a population of runs, so the
-# selection picks an instance and plot.py takes the cheapest record of it.
-source: results
+source:
+  folder: results
+  select:
+    instance.name: iridium33
+    instance.num_chasers: 15
+    instance.max_load: 10
+    instance.max_time: 365d
 
 figures:
+  - name: raan
+    draw: raan
+    reduce: raw
+    legend: false
+    xlabel: time [days]
+    ylabel: RAAN [deg]
+    xname: time_days
+
+  - name: timeline
+    draw: timeline
+    reduce: raw
+    legend: false
+    xlabel: time [days]
+    ylabel: chaser
+    xname: start_days
+
   - name: load
-    select: {instance.name: iridium33}
+    draw: load
     reduce: raw
     xlabel: chaser
     ylabel: targets collected
     xname: chaser_index
 
   - name: cost_time
-    select: {instance.name: iridium33}
+    draw: cost_time
     reduce: raw
     xlabel: mission duration [days]
     ylabel: chaser cost
     xname: duration_days
 
   - name: spread
-    select: {instance.name: iridium33}
+    draw: spread
     reduce: raw
     xlabel: RAAN spread [deg]
     ylabel: cost per target
     xname: raan_spread_deg
 
-  # The assignment itself: every target's RAAN drifting over the mission, with
-  # each chaser's arrivals marked on top. A legend of fifteen chasers would
-  # swamp the plot, so the colours speak for themselves.
-  - name: assignment
-    select: {instance.name: iridium33}
+  - name: legs
+    draw: legs
     reduce: raw
-    legend: false
-    xlabel: time [days]
-    ylabel: RAAN [deg]
-    xname: time_days
+    x_scale: log
+    xlabel: leg cost
+    ylabel: share of legs [%]
+    xname: leg_cost

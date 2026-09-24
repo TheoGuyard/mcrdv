@@ -1,0 +1,25 @@
+source:
+  folder: results
+  select: {instance.name: iridium33}
+
+figures:
+  - name: pareto_time
+    draw: pareto
+    group_by: preset
+    value: cost
+    reduce: median+iqr
+    x_value: t_solve
+    x_scale: log
+    xlabel: search time [s]
+    ylabel: mission cost
+    xname: seconds
+
+  - name: pareto_iterations
+    draw: pareto
+    group_by: preset
+    value: cost
+    reduce: median+iqr
+    x_value: iterations
+    xlabel: genetic iterations
+    ylabel: mission cost
+    xname: iterations
