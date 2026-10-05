@@ -20,4 +20,3 @@ figures:
     xlabel: targets
     ylabel: runs at the optimum [%]
     xname: targets
-

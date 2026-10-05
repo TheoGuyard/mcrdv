@@ -33,9 +33,9 @@ common:
 sweeps:
 
   convergence:
-    walltime: "01:30:00"
-    memory: 64G
-    tasks: 20
+    walltime: "01:15:00"
+    memory: 8G
+    tasks: 1
     base:
       name: convergence
       description: Incumbent cost against elapsed search time.
@@ -49,14 +49,14 @@ sweeps:
     campaign:
       - axes:
           instance:
-            # - *iridium33
-            - *cosmos2251
-            - *fengyun1C
+            - *iridium33
+            # - *cosmos2251  # requires 16G memory
+            # - *fengyun1C   # requires 64G memory
           seed: {range: 10}
 
   schedule:
     walltime: "00:30:00"
-    memory: 16G
+    memory: 8G
     tasks: 4
     base:
       name: schedule
@@ -69,17 +69,9 @@ sweeps:
         type: dp
         args: {grid_size: 4096, use_hints: true, allow_waiting: true}
       repeats: 3
-    set:
-      solver.args.schedule.args.grid_size: 32
-      solver.args.schedule.args.use_hints: true
-      solver.args.schedule.args.allow_waiting: true
     campaign:
       - axes:
-          set:
-            - {solver.args.schedule.args.use_hints: false}
-            - {solver.args.schedule.args.use_hints: true}
-          solver.args.schedule.args.grid_size:
-            [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+          solver.args.schedule.args.grid_size: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
           seed: {range: 10}
       - axes:
           set: [{solver.args.schedule.args.allow_waiting: false}]
@@ -88,7 +80,7 @@ sweeps:
   sensitivity:
     walltime: "02:00:00"
     memory: 16G
-    tasks: 24
+    tasks: 48
     base:
       name: sensitivity
       description: One instance parameter at a time, on generated clouds.
@@ -112,11 +104,11 @@ sweeps:
           instance.num_chasers: [20, 30, 40, 50, 60, 70, 80]
           instance.max_time: [91d, 183d, 274d, 365d, 456d, 545d, 639d, 730d]
           instance.max_load: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-          seed: {range: 5}
+          seed: {range: 10}
 
   sequence:
     walltime: "02:00:00"
-    memory: 16G
+    memory: 8G
     tasks: 5
     base:
       name: sequence
@@ -125,11 +117,15 @@ sweeps:
       instance: *iridium33
       solver: *mcrdv
     set:
-      solver.args.sequence.args.max_time: 10m
+      solver.args.sequence.args.max_time: 1m
     campaign:
       - axes:
+          instance:
+            - *iridium33
+            # - *cosmos2251  # requires 16G memory
+            # - *fengyun1C   # requires 64G memory
           solver.args.sequence.args.preset: [0, 1, 2, 3, 4, 5, 6]
-          seed: {range: 5}
+          seed: {range: 10}
 
   transfer:
     walltime: "01:30:00"
@@ -137,7 +133,7 @@ sweeps:
     tasks: 6
     base:
       name: transfer
-      description: How the transfer layer's definition shapes a mission plan.
+      description: How the transfer layer definition shapes a mission plan.
       seed: 0
       instance: *iridium33
       solver: *mcrdv
@@ -146,15 +142,14 @@ sweeps:
         blackout_period: 10d
         blackout_duration: 3d
     set:
-      solver.args.sequence.args.max_time: 2m
+      solver.args.sequence.args.max_time: 10m
     campaign:
       - axes:
-          set: [{study: oracles}]
           solver.args.transfer:
             - {type: qlaw}
             - {type: qlaw_arrival, args: {factor_time: 5.787037e-5}}
             - {type: qlaw_urgency, args: {weight: 20.0, share: 0.33}}
             - {type: qlaw_blackout, args: {period: 10d, duration: 3d}}
             - {type: qlaw_embargo, args: {start: 50d}}
-          seed: {range: 5}
+          seed: {range: 10}
 

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Showcase: solve, and keep the whole plan for the figures to read."""
-
 import sys
 from pathlib import Path
 
@@ -10,13 +8,6 @@ from _common import analysis, driver, planners  # noqa: E402
 
 
 def execute(config: dict) -> dict:
-    """Solve, and describe the plan's structure alongside it.
-
-    Both the aggregate metrics and the per-chaser breakdown are derived here,
-    where the `Problem` is already in hand: the per-chaser numbers need
-    drift-corrected right ascensions, and making a plotting script rebuild the
-    catalogue to get them would be wasteful and easy to get subtly wrong.
-    """
     result = planners.solve(config)
     problem = planners.problem(config)
     result.update(analysis.mission_metrics(result["mission"], problem))

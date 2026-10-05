@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Figures for the transfer experiment.
-
-One solver, one instance, one set of seeds -- and four different answers to the
-question of what a transfer costs. Every figure here reads the *structure* of
-the plans that come back rather than their score: when the chasers fly and when
-they sit still, how long a single pause lasts, what a leg costs, how wide a
-chaser's share of the sky is, how many chasers are used at all, and where in a
-tour a given target ends up.
-
-None of that was asked for. It is what the search does when the price of a
-transfer changes underneath it, which is the claim these figures exist to
-support: the transfer layer is not a parameter of the mission, it is the
-definition of one.
-"""
-
 import sys
 from pathlib import Path
 
@@ -26,9 +11,6 @@ from mcrdv.orbit import DAY  # noqa: E402
 from _common import config as configuration  # noqa: E402
 from _common import export, plotting, tidy  # noqa: E402
 
-# The oracles, in the order they are drawn, named for what they price rather
-# than for what they achieve: these figures are about the definition, not the
-# score. An oracle missing from the records is simply skipped.
 ORACLES = {
     "fuel": "delta-v",
     "arrival": "delta-v + arrival time",
@@ -37,9 +19,6 @@ ORACLES = {
     "embargo": "delta-v, late start",
 }
 
-# The structural quantities followed as the weight on time is raised, each as
-# the column holding it and what it is called on a figure. All are drawn as a
-# ratio to the delta-v-only plan, which is what lets them share an axis.
 STRUCTURE = (
     ("delta_v", "delta-v"),
     ("wait_time", "time spent waiting"),
@@ -49,7 +28,6 @@ STRUCTURE = (
 
 
 def _oracles(data):
-    """The records of each oracle present, in the order they are drawn."""
     grouped: dict = {}
     for record, row in zip(data.records, data.rows):
         grouped.setdefault(row.get("oracle"), []).append(record)
@@ -57,18 +35,10 @@ def _oracles(data):
 
 
 def _legs(records):
-    """Every leg of every run, as the rows `run.py` wrote them."""
     return [leg for record in records for leg in record.result.get("legs", ())]
 
 
 def _distribution(ax, values, name, scale=1.0):
-    """One sample, drawn as the share of it at or below each value.
-
-    A distribution rather than a mean, because that is where the differences
-    between these plans live: two oracles can spend the same total time waiting
-    and reach it from pauses of entirely different lengths, and an average
-    hides exactly the structure this experiment is about.
-    """
     values = np.asarray(values, dtype=float) * scale
     values = np.sort(values[np.isfinite(values)])
     if not values.size:
@@ -85,12 +55,6 @@ def _distribution(ax, values, name, scale=1.0):
 
 
 def _embargo(data):
-    """When the embargoed runs are allowed to start, in days, if any are here.
-
-    Read from the configuration rather than from the plans: it is what the
-    layer was told, and a figure that drew it from the first departure it
-    found would be drawing the plan's answer as though it were the question.
-    """
     for row in data.rows:
         if row.get("oracle") != "embargo":
             continue
@@ -101,20 +65,6 @@ def _embargo(data):
 
 
 def progress(ax, data):
-    """How the collections fill the horizon.
-
-    Targets collected against time, per run. The shape of the curve is the
-    shape of the mission: a plan that prices delta-v alone spreads its
-    collections over the whole horizon, because waiting for a plane to drift
-    into place costs nothing and the horizon is the only thing that stops it.
-    Pricing the arrival time bends the same work into the first weeks and
-    leaves the rest of the year empty. Nothing about the instance changed --
-    only what a transfer was said to cost.
-
-    The shaded stretch, where an embargoed oracle is among those drawn, is the
-    span it may not depart in: its curve leaves the floor only once the date
-    passes, and the mission it then flies is the same mission, late.
-    """
     start = _embargo(data)
     if start:
         export.span(ax, 0.0, start)
@@ -140,14 +90,6 @@ def progress(ax, data):
 
 
 def rhythm(ax, data):
-    """What a chaser's mission is made of: transfers, and waiting to start one.
-
-    Per active chaser, averaged over the runs. The delta-v-only plan is mostly
-    waiting, and that is how it is cheap: a chaser that loiters lets the J2
-    drift perform the plane change it would otherwise have to buy. Pricing time
-    takes that back -- the pauses shrink, and the chaser is done in a fraction
-    of the mission the other plans take.
-    """
     oracles = _oracles(data)
     if not oracles:
         return
@@ -174,14 +116,6 @@ def rhythm(ax, data):
 
 
 def waits(ax, data):
-    """How long a single pause lasts.
-
-    Every wait between arriving somewhere and leaving it again, as a
-    distribution. The curves are three different mission rhythms: pauses of
-    weeks where waiting is free, almost none where the arrival time is priced,
-    and -- under the window constraint -- pauses that end where a window
-    closes, since a chaser held back leaves at the instant it may.
-    """
     for name, records in _oracles(data):
         _distribution(
             ax, [leg["wait"] for leg in _legs(records)], name, scale=1.0 / DAY
@@ -190,28 +124,12 @@ def waits(ax, data):
 
 
 def legs(ax, data):
-    """What a single transfer costs, on the scale every plan shares.
-
-    Each leg re-priced in delta-v at the departure the plan actually chose, as
-    a distribution. This is where the bill for hurrying appears: the curves
-    part at the expensive end, where a plan that would not wait for the
-    geometry has to buy the plane change instead of drifting into it.
-    """
     for name, records in _oracles(data):
         _distribution(ax, [leg["delta_v"] for leg in _legs(records)], name)
     ax.legend(fontsize=7, loc="lower right")
 
 
 def spread(ax, data):
-    """How wide a slice of the sky one chaser is given.
-
-    The angular spread of a chaser's targets in right ascension, over the
-    active chasers. This is the assignment rather than the schedule: whether
-    the oracle changed *which* targets are grouped together, not merely when
-    they are collected. A plan under time pressure cannot wait for a distant
-    plane to come round, so it either takes a wider slice and pays for it, or
-    splits the work over more chasers -- which is what `load` counts.
-    """
     for name, records in _oracles(data):
         _distribution(
             ax,
@@ -228,14 +146,6 @@ def spread(ax, data):
 
 
 def load(ax, data):
-    """How the work is shared out, chaser by chaser.
-
-    Chasers ranked by how much they carry, averaged over the runs. A flat
-    profile that stops abruptly is a plan that filled as few chasers as it
-    could; one that tails off slowly has spread the same targets over more of
-    the swarm. Which of the two comes back is a structural decision nobody
-    asked the planner to make -- the fleet size is the same in every run here.
-    """
     for name, records in _oracles(data):
         profiles = [
             sorted(
@@ -261,15 +171,6 @@ def load(ax, data):
 
 
 def priority(ax, data):
-    """Where in a tour the hazardous objects end up.
-
-    The mean visiting position of a hazardous target beside that of every other
-    one, where position 1 is the first target a chaser collects. An oracle that
-    weighs the hazardous objects alone should pull them to the front of the
-    tours and leave the rest in whatever order is cheapest -- a reordering of
-    the sequences rather than a rescheduling of them, which is the search
-    rearranging itself around a price only it can see.
-    """
     oracles = _oracles(data)
     if not oracles:
         return
@@ -297,21 +198,6 @@ def priority(ax, data):
 
 
 def blackout(ax, data):
-    """Where in the cycle the chasers depart, against the window barred to them.
-
-    Departures are folded onto one period rather than drawn along the mission:
-    a window three days in ten is invisible on a year-long axis, and what
-    matters is not when a chaser leaves but where in the cycle it leaves. The
-    shaded stretch is the window. The delta-v-only oracle knows nothing of it
-    and departs inside as often as anywhere else; the oracle that prices those
-    departures at infinity leaves the stretch empty and piles its departures
-    against the trailing edge -- a mission visibly built around a constraint
-    that exists nowhere but in the transfer layer.
-
-    The window is two numbers in the record -- the period and the duration --
-    rather than a column, so it is drawn from those and carried into the tikz
-    stub as the shaded stretch it is.
-    """
     settings = next(
         (
             record.config.get("metrics")
@@ -361,15 +247,6 @@ def blackout(ax, data):
 
 
 def weighting(ax, data):
-    """The same oracle restructuring the plan as its weight on time rises.
-
-    Everything as a ratio to the plan built from delta-v alone, so quantities
-    sharing no units can share an axis. None of this is a setting the planner
-    was given: the weight is a price, and a shorter mission, fewer idle weeks
-    and more of the swarm in use are what the search found worth buying at that
-    price. The plan moves continuously between two structures, which is the
-    point -- the oracle is a dial, not a switch.
-    """
     rows = [
         row for row in data.rows if row.get("oracle") in ("fuel", "arrival")
     ]

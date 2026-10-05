@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Figures describing one produced mission plan.
-
-What the planner decided, from four angles: which targets each chaser collects
-and where they are when it does (`raan`), when it flies and when it loiters
-(`timeline`), how the work and its cost are shared out (`load`, `cost_time`,
-`spread`), and how the cost is spread over the legs (`legs`).
-
-The assignment drawing is written once and registered for every Keplerian
-element, so `plot.yaml` can ask for the same picture in any of them; right
-ascension is the one that drives a transfer's cost, and the one drawn by
-default.
-"""
-
 import math
 import sys
 from pathlib import Path
@@ -42,12 +29,6 @@ AXIS = {
 
 
 def _best(data):
-    """The cheapest record of the selection: the plan the figures describe.
-
-    A single solve of a stochastic search is an anecdote, so the campaign runs
-    several seeds; the figures show the best of them, and the others stay in the
-    results for the choice to be visible.
-    """
     usable = [r for r in data.records if r.result.get("visits")]
     if not usable:
         return None
@@ -55,24 +36,11 @@ def _best(data):
 
 
 def _active(record):
-    """The chasers that actually collect something, heaviest first.
-
-    Idle chasers are dropped rather than drawn as zeros: the planner is free to
-    leave them on the ground, and a row of empty bars says nothing about how the
-    work that *was* assigned got distributed.
-    """
     rows = [c for c in record.result.get("chasers", []) if c["load"] > 0]
     return sorted(rows, key=lambda c: -c["load"])
 
 
 def _ticks(ax):
-    """Ticks on whole fractions of a turn, coarsened to the range drawn.
-
-    For an angle that drifts several turns over a mission, ticks every quarter
-    turn would be twenty unreadable labels; for one that barely moves, they
-    would be a single label. So this applies only above a quarter turn of
-    range, and leaves matplotlib to it below.
-    """
     low, high = ax.get_ylim()
     span = high - low
     if span < 90.0:
@@ -84,26 +52,6 @@ def _ticks(ax):
 
 
 def _drift(ax, data, element):
-    """Which chaser collects which target, laid out in one element against time.
-
-    The faint lines are the objects themselves, each carried through the
-    mission by the secular J2 model; where two of them run close together they
-    are cheap to visit in succession. The dashed line is the swarm's own orbit:
-    every chaser starts on it and drifts with it until it departs, so every
-    track begins there. The markers are where a chaser arrives at a target, one
-    colour per chaser, joined in visiting order.
-
-    An angle is drawn **unwrapped**, so the axis runs past 360 and below zero
-    rather than folding back. Wrapping to a single turn is what an angle usually
-    wants, but here it cuts every track that crosses the seam into pieces at
-    opposite edges of the plot, which is precisely the reading these figures
-    exist to support. The cost is that two objects either side of zero look far
-    apart when they are not; over one mission the drift is a few turns at most,
-    so that trade is worth making.
-
-    A record written before this element was kept has no track for it, and
-    draws nothing rather than failing: re-run the experiment to fill it.
-    """
     best = _best(data)
     if best is None:
         return
@@ -201,27 +149,14 @@ def _drift(ax, data, element):
 
 
 def _drawing(element):
-    """The drawing for one element, as `plot.yaml` asks for it by name."""
-
     def draw(ax, data):
         _drift(ax, data, element)
 
     draw.__name__ = element
-    draw.__doc__ = f"The assignment read in {element}."
     return draw
 
 
 def timeline(ax, data):
-    """When each chaser flies and when it loiters, one row per chaser.
-
-    The pale stretches are waiting on the orbit last reached, the coloured ones
-    are transfers. This is the schedule layer's decision made visible: waiting
-    is free and a plane drifts into alignment on its own, so a plan that is
-    mostly pale is buying its delta-v with patience. Rows are ordered by the
-    moment each chaser finishes, so the staircase shows how the swarm's work
-    tails off -- and a row still flying at the horizon is one the mission
-    duration limit is binding on.
-    """
     record = _best(data)
     if record is None or not record.result.get("timeline"):
         return
@@ -265,7 +200,6 @@ def timeline(ax, data):
 
 
 def load(ax, data):
-    """How the targets are shared out."""
     record = _best(data)
     if record is None:
         return
@@ -279,12 +213,6 @@ def load(ax, data):
 
 
 def cost_time(ax, data):
-    """Each chaser's cost against how long it flies.
-
-    A chaser that is expensive because it flies for a year is a different
-    problem from one that is expensive in a month, and the scatter separates
-    them where a cost ranking alone would not.
-    """
     record = _best(data)
     if record is None:
         return
@@ -298,13 +226,6 @@ def cost_time(ax, data):
 
 
 def spread(ax, data):
-    """Angular spread of each chaser's targets against what it cost.
-
-    This is the geometric claim the whole approach rests on: a chaser assigned
-    targets in nearby orbital planes should be cheap, because a plane change is
-    what a transfer mostly pays for. If the relationship is not visible here,
-    the clustering is not doing what it is supposed to.
-    """
     record = _best(data)
     if record is None:
         return
@@ -318,13 +239,6 @@ def spread(ax, data):
 
 
 def legs(ax, data):
-    """What the individual transfers cost, as a distribution.
-
-    Every leg of every chaser, cheapest first, against the share of legs at or
-    below it. A curve that climbs steeply and then flattens far to the right is
-    a plan whose cost sits in a handful of expensive transfers -- worth knowing,
-    because those are the legs a better sequence would have to remove.
-    """
     record = _best(data)
     if record is None:
         return

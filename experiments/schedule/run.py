@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Schedule: plan quality against time per call, for the schedule alone."""
-
 import sys
 from pathlib import Path
 
@@ -15,14 +13,6 @@ from _common import config as configuration  # noqa: E402
 
 
 def execute(config: dict) -> dict:
-    """Draw the bank, then score the configured layer against the reference.
-
-    The reference is the configured stack with its schedule layer replaced by
-    the one `reference` describes -- written as any layer is, a `type` and its
-    `args` -- so the two differ in the grid and nothing else. The bank walks
-    along the per-leg bounds of the reference, which depend on the transfer
-    layer alone, never on the layer being measured.
-    """
     problem = planners.problem(config)
     layer = planners.schedule(config)
     reference = planners.schedule(

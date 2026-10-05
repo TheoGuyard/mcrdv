@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Figures for the optimality experiment."""
-
 import sys
 from pathlib import Path
 
@@ -12,7 +10,6 @@ from _common import export, plotting, tidy  # noqa: E402
 
 
 def _planners(rows):
-    """Planner names in a stable order: the search by depth, then the rest."""
     names = sorted({r["planner"] for r in rows if r.get("planner")})
     return sorted(names, key=lambda n: (not n.startswith("hgs"), n))
 
@@ -22,19 +19,10 @@ def _sizes(rows):
 
 
 def _column(name):
-    """A planner name as a pgfplots column: letters, digits, underscores."""
     return name.replace("-", "_")
 
 
 def gap(ax, data):
-    """Mean gap to the optimum against the instance size, per planner.
-
-    The mean rather than the median: the search sits at the optimum on most
-    runs, so its median is zero almost everywhere and hides exactly the misses
-    this figure is about. How often a planner is optimal is the next figure.
-    The axis is linear up to 1% and logarithmic above, so a search a fraction of
-    a percent off and a construction far off both stay readable.
-    """
     sizes = _sizes(data.rows)
     for name in _planners(data.rows):
         means = [
@@ -64,11 +52,6 @@ def gap(ax, data):
 
 
 def optimal(ax, data):
-    """Share of runs that return the optimum, per planner and size.
-
-    A run that returns an infeasible plan counts as a miss: it is not the
-    optimum, whatever its cost.
-    """
     sizes = _sizes(data.rows)
     for name in _planners(data.rows):
         share = []

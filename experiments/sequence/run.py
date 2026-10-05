@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Sequence: what a preset of the search buys, and what it costs in time."""
-
 import sys
 from pathlib import Path
 
@@ -15,12 +13,6 @@ CLOSE = 0.98
 
 
 def preset(config: dict) -> int:
-    """The preset the run searched at.
-
-    A configuration that names none gets `HgsConfig`'s own defaults, which are
-    preset 4's; this experiment is about the presets, so leaving it out is a
-    mistake rather than a default worth guessing at.
-    """
     _, args = planners.layer(config, "sequence")
     if "preset" not in args:
         raise SystemExit(
@@ -30,7 +22,6 @@ def preset(config: dict) -> int:
 
 
 def budget(config: dict) -> float:
-    """The wall-clock cap on the search, in seconds, or infinity."""
     _, args = planners.layer(config, "sequence")
     if "max_time" not in args:
         return float("inf")
@@ -38,16 +29,6 @@ def budget(config: dict) -> float:
 
 
 def execute(config: dict) -> dict:
-    """Solve, and say what the search was allowed and what it used.
-
-    The two numbers this experiment is about -- what the plan cost and how long
-    the search took to find it -- are already what a solve reports, so there is
-    little to add. What does need adding is whether the run *finished*: a deep
-    preset on a large catalogue will not exhaust its iterations inside any
-    budget a campaign can give it, and a point that sits at the cap is the cap
-    speaking rather than the preset. It is recorded rather than filtered out,
-    because where the cap binds is worth seeing.
-    """
     result = planners.solve(config)
     result["preset"] = preset(config)
     result["budget"] = budget(config)

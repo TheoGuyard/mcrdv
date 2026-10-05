@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Figures for the schedule experiment."""
-
 import sys
 from pathlib import Path
 
@@ -23,7 +21,6 @@ GRID = "solver.args.schedule.args.grid_size"
 
 
 def _grids(rows, method):
-    """Grid sizes a method was run at, and its rows at each, smallest first."""
     members = [r for r in rows if r.get("method") == method]
     sizes = sorted({int(r[GRID]) for r in members})
     return sizes, [
@@ -32,23 +29,10 @@ def _grids(rows, method):
 
 
 def _no_wait(rows, column):
-    """Median of `column` over the no-wait runs: they ignore the grid, so
-    every one of them measures the same thing."""
     return tidy.spread([r for r in rows if r.get("method") == NO_WAIT], column)
 
 
 def pareto(ax, data):
-    """Mean gap against time per call, one point per grid size.
-
-    Both axes are medians over the seeds. A curve that sits lower at the same
-    time is the better grid; one that bends flat is where refining it stops
-    paying. The grid sizes are written along the default layer's curve only:
-    the two curves nearly coincide, and labelling both makes neither legible.
-
-    The sizes are handed to `export` as well as drawn, so the tikz figure
-    writes them where matplotlib does. They are the one thing on this figure a
-    reader cannot reconstruct from the curve itself.
-    """
     for method, (name, label) in METHODS.items():
         sizes, groups = _grids(data.rows, method)
         if not sizes:
@@ -90,11 +74,6 @@ def pareto(ax, data):
 
 
 def gap(ax, data):
-    """Mean gap against the grid size, with the spread over seeds.
-
-    No-wait ignores the grid, so it is a flat dashed line across the sizes the
-    other methods were run at -- the level the dynamic program starts from.
-    """
     drawn = []
     for method, (name, label) in METHODS.items():
         sizes, groups = _grids(data.rows, method)
@@ -132,12 +111,6 @@ def gap(ax, data):
 
 
 def time(ax, data):
-    """Time per call over built tables, and time to tabulate a new leg.
-
-    A call is dominated by the dynamic program once the legs are known; the
-    first meeting of a leg costs a transfer evaluation per grid point, plus
-    the scan that finds the hints when they are asked for.
-    """
     for method, (name, label) in METHODS.items():
         sizes, groups = _grids(data.rows, method)
         if not sizes:
@@ -163,8 +136,6 @@ def time(ax, data):
 
 
 def _per_sequence(records, key, method=None):
-    """Per-sequence arrays of `key` and of the leg count, concatenated over the
-    records given -- only those of `method` when one is named."""
     legs, values = [], []
     for record in records:
         if method is not None and record.result.get("method") != method:
@@ -180,11 +151,6 @@ def _per_sequence(records, key, method=None):
 
 
 def length(ax, data):
-    """Time per call against the number of legs, at one grid size.
-
-    The dynamic program is linear in the legs for a fixed grid, so these should
-    be straight lines; no-wait is the floor, a single pass with no table.
-    """
     for method, (name, label) in {
         **METHODS,
         NO_WAIT: ("nowait", NO_WAIT),
@@ -203,60 +169,11 @@ def length(ax, data):
         )
 
 
-def bound(ax, data):
-    """Summed per-leg bound over the best schedule found, per length.
-
-    One curve per instance, median and interquartile range over the bank. The
-    ratio says how much of a plan's cost the screen can see without scheduling
-    it; the dotted line at 1 is where the bound would stop being one.
-
-    Every record selected is used. The bound and the reference do not depend
-    on the layer measured, so `plot.yaml` should select a single method and
-    grid size, or each sequence is counted once per configuration.
-    """
-    names = list(dict.fromkeys(r.get("instance.name") for r in data.rows))
-    everything = []
-    for name in names:
-        records = [
-            rec
-            for rec, row in zip(data.records, data.rows)
-            if row.get("instance.name") == name
-        ]
-        legs, bounds = _per_sequence(records, "bound")
-        _, best = _per_sequence(records, "reference")
-        usable = np.isfinite(best) & (best > 0)
-        legs, ratio = legs[usable], bounds[usable] / best[usable]
-        counts = np.unique(legs)
-        if not counts.size:
-            continue
-        pick = [ratio[legs == n] for n in counts]
-        export.band(
-            ax,
-            counts,
-            [np.percentile(p, 25) for p in pick],
-            [np.percentile(p, 75) for p in pick],
-            name=f"{name}_iqr",
-        )
-        export.line(
-            ax,
-            counts,
-            [np.median(p) for p in pick],
-            name=name,
-            marker="o",
-        )
-        everything.append(ratio)
-    ax.axhline(1.0, color="0.4", linestyle=":", linewidth=1.0)
-    if everything:
-        above = float(np.mean(np.concatenate(everything) > 1.0 + 1e-9))
-        ax.set_title(f"{100.0 * above:.1f}% of sequences above 1")
-
-
 DRAW_MAP = {
     "pareto": pareto,
     "gap": gap,
     "time": time,
     "length": length,
-    "bound": bound,
 }
 
 

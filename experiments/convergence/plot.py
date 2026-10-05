@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Figures for the convergence experiment."""
-
 import sys
 from pathlib import Path
 
@@ -12,7 +10,6 @@ from _common import export, plotting, tidy  # noqa: E402
 
 
 def _segments(values, keep):
-    """`values` with everything outside `keep` blanked out."""
     out = np.where(keep, values, np.nan)
     edges = np.flatnonzero(keep[:-1] != keep[1:])
     for edge in edges:
@@ -22,7 +19,6 @@ def _segments(values, keep):
 
 
 def convergence(ax, data):
-    """Median incumbent against time, with the spread across seeds."""
     runs = [r for r in data.records if r.result.get("trace")]
     if not runs:
         return

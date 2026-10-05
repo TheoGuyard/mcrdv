@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Transfer: how the definition of the transfer layer shapes a mission plan."""
-
 import sys
 from pathlib import Path
 
@@ -13,18 +11,12 @@ from _common import config as configuration  # noqa: E402
 
 
 def oracle(config: dict) -> str:
-    """What the run's cost oracle is called, without its family name."""
     kind, _ = planners.layer(config, "transfer")
     kind = kind or "qlaw"
     return "fuel" if kind == "qlaw" else kind.replace("qlaw_", "")
 
 
 def weight(config: dict) -> float:
-    """What the oracle weighs time at, in m/s of delta-v per day.
-
-    One number for the two oracles that trade fuel against time, so the plans
-    they produce can be lined up along it; zero for the ones that do not.
-    """
     kind, args = planners.layer(config, "transfer")
     fuel = float(args.get("factor_fuel", 1.0))
     if kind == "qlaw_arrival":
@@ -36,7 +28,6 @@ def weight(config: dict) -> float:
 
 
 def yardstick(config: dict) -> dict:
-    """The `metrics` block, with its durations read as seconds."""
     node = dict(config.get("metrics") or {})
     for key in ("blackout_period", "blackout_duration"):
         if key in node:
@@ -45,25 +36,9 @@ def yardstick(config: dict) -> dict:
 
 
 def execute(config: dict) -> dict:
-    """Solve under one oracle, and describe the plan it produced.
-
-    The plan's own `cost` is whatever its oracle weighed, so it says nothing
-    across runs and no figure reads it. What the record keeps instead is the
-    plan's *structure*, on a scale every oracle shares: every leg re-priced in
-    delta-v at the departure the plan chose, every chaser's share of the work,
-    and the aggregates of both. Which of those a figure reads is a plotting
-    decision; this is simply the plan, written down.
-
-    The hazard mask rides on the legs rather than being re-derived while
-    drawing: it is a property of the catalogue, and a plan built by an oracle
-    that never heard of it is still read against it -- which is what makes the
-    runs comparable.
-    """
     result = planners.solve(config)
     problem = planners.problem(config)
 
-    # The Q-law with the run's physics and none of its objective: one scale
-    # for plans built under oracles that disagree about what a leg is worth.
     delta_v = planners.delta_v(config)
     delta_v.initialize(problem)
 

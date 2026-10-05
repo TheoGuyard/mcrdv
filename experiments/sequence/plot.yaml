@@ -1,6 +1,7 @@
 source:
   folder: results
-  select: {instance.name: iridium33}
+  select:
+    instance.name: iridium33
 
 figures:
   - name: pareto_time

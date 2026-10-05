@@ -200,13 +200,6 @@ def span(ax: plt.Axes, lo: float, hi: float, **kwargs: Any):
     return artist
 
 
-def bars(
-    ax: plt.Axes, labels: Sequence[str], heights, name: str, **kwargs: Any
-):
-    """Categorical bars, recorded with their labels for `symbolic x coords`."""
-    return grouped_bars(ax, labels, {name: heights}, **kwargs)
-
-
 def grouped_bars(
     ax: plt.Axes,
     labels: Sequence[str],

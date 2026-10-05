@@ -1,6 +1,5 @@
 name: optimality
 description: Sequence layer against the exact optimum sequencing (small instances only).
-
 seed: 0
 
 instance:
@@ -12,8 +11,12 @@ instance:
 solver:
   type: mcrdv
   args:
-    transfer: {type: qlaw}
-    schedule: {type: dp}
+    transfer:
+      type: qlaw
+    schedule:
+      type: dp
     sequence:
       type: hgs
-      args: {preset: 3, max_time: 1m}
+      args:
+        preset: 3
+        max_time: 1m

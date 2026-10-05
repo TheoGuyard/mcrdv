@@ -1,29 +1,11 @@
 #!/usr/bin/env python3
-"""Running the experiments on the cluster, from one place.
-
-    ./script.py send                 # local  -> cluster
-    ./script.py install              # build the environment there
-    ./script.py make                 # write every campaign and its job file
-    ./script.py run -s sensitivity   # submit one campaign as an array job
-    ./script.py status -s sensitivity  # did every configuration produce a record?
-    ./script.py receive              # cluster -> local
-    ./script.py clean                # forget the generated campaigns
-
-`send` and `receive` run on the laptop, the rest on the cluster. What each
-campaign is, and what it costs to run, is `sweeps.yaml`; this file only turns
-that into configuration files, a Slurm job, and the two rsyncs around them.
-
-A sweep describes its runs entirely: its `base`, adjusted by its `set`, is the
-configuration its axes vary from, and no `run.yaml` is read. Those stay what
-they are -- one run, by hand -- so that editing one cannot quietly change what
-a campaign means.
-
-A task runs its share of a campaign sequentially in one process, which is what
-`run.py --task-id/--num-tasks` is for: numba compiles the solver in eight to
-twelve seconds and then never again, so one configuration per array task would
-pay that toll on every one of them. Configurations are spread across tasks by
-stride rather than in blocks, since runs differ in cost by orders of magnitude
-and a stride keeps the tasks balanced.
+"""Scripts for running the experiments on the cluster.
+    ./script.py send                # send local workspace to remote cluster
+    ./script.py install             # build the environment there
+    ./script.py make                # write every campaign and its job file
+    ./script.py run -s <name>       # submit one campaign as an array job
+    ./script.py receive -s <name>   # retrieve locally remote results on cluster
+    ./script.py clean               # clear the generated campaigns
 """
 
 from __future__ import annotations
@@ -84,9 +66,7 @@ def pick(name: str | None) -> Dict[str, Dict[str, Any]]:
     if name is None:
         return known
     if name not in known:
-        raise SystemExit(
-            f"unknown sweep '{name}' (known: {', '.join(sorted(known))})"
-        )
+        raise SystemExit(f"unknown sweep '{name}'")
     return {name: known[name]}
 
 
@@ -104,16 +84,7 @@ def values(spec: Any) -> List[Any]:
 
 
 def configs(base: Mapping[str, Any], sweep: Mapping[str, Any]) -> Iterator:
-    """Every configuration a sweep describes, arm by arm.
-
-    A sweep's own `set` is applied to the base first, once: it is what lets a
-    base be shared between sweeps through a YAML anchor and still be adjusted
-    here, since an anchor can be referred to but not edited.
-
-    `set` is also the one reserved axis name: there, each of its values is a
-    bundle of overrides applied together, so quantities that must move as one
-    do. As an axis it varies slowest, being the outermost loop of its arm.
-    """
+    """Every configuration a sweep campaign describes."""
     fixed = sweep.get("set") or {}
     if not isinstance(fixed, Mapping):
         raise SystemExit(f"a sweep's 'set' is a mapping, got {fixed!r}")
@@ -142,16 +113,11 @@ def configs(base: Mapping[str, Any], sweep: Mapping[str, Any]) -> Iterator:
                 )
 
 
-# ----- Slurm job file ----- #
+# ----- Slurm files ----- #
 
 
 def slurm_job_stream(name: str, sweep: Mapping[str, Any], count: int) -> str:
-    """The array job that runs one campaign.
-
-    The numba cache goes to node-local storage: it is written on every import
-    and read on every task, which is the access pattern a shared filesystem
-    handles worst.
-    """
+    """The array job that runs one campaign."""
     experiment = sweep["experiment"]
     tasks = min(int(sweep["tasks"]), max(count, 1))
     return textwrap.dedent(
@@ -254,10 +220,7 @@ def make(name: str | None = None) -> None:
         experiment = sweep["experiment"]
         base = sweep.get("base")
         if not isinstance(base, Mapping) or not base:
-            raise SystemExit(
-                f"sweep '{sweep_name}' has no 'base' configuration; a sweep "
-                "describes its runs entirely, and reads no run.yaml"
-            )
+            raise SystemExit(f"sweep '{sweep_name}' has no 'base'.")
         if not (EXPS_DIR / experiment / "run.py").exists():
             raise SystemExit(f"no experiment '{experiment}' to run it with")
 
@@ -280,55 +243,6 @@ def make(name: str | None = None) -> None:
             f"make {sweep_name}: {len(campaign)} configurations, "
             f"{tasks} tasks of at most {share}, {sweep['walltime']} each"
         )
-
-
-def _key(config: Mapping[str, Any]) -> str:
-    """A configuration as one comparable string.
-
-    A record keeps the configuration it ran verbatim, so a campaign's files and
-    its records can be matched on their content rather than on a name, a count
-    or a timestamp -- none of which survive a task dying halfway and the
-    campaign being run again.
-    """
-    return json.dumps(config, sort_keys=True, default=str)
-
-
-def status(name: str | None = None) -> None:
-    """Say whether every configuration of a campaign produced a record.
-
-    An array job that loses a task leaves a results directory that looks
-    perfectly healthy: the records that are there are complete, and nothing
-    says which ones are not. This is the check for that, and the reason to run
-    it before `clean` -- afterwards the campaign's configurations are gone, and
-    only the records themselves say what was run.
-    """
-    for sweep_name, sweep in pick(name).items():
-        configs_dir = TMPS_DIR / sweep_name / "configs"
-        if not configs_dir.is_dir():
-            print(f"{sweep_name}: not made")
-            continue
-
-        wanted = {}
-        for path in sorted(configs_dir.glob("run-*.yaml")):
-            wanted[_key(configuration.load(path))] = path.name
-
-        results = EXPS_DIR / sweep["experiment"] / "results"
-        found, failed = set(), 0
-        for item in recording.load(results) if results.is_dir() else ():
-            found.add(_key(item.config))
-            failed += bool(item.failed)
-
-        missing = [name for key, name in wanted.items() if key not in found]
-        done = len(wanted) - len(missing)
-        state = "complete" if not missing else f"{len(missing)} MISSING"
-        print(
-            f"{sweep_name}: {done}/{len(wanted)} configurations have a record"
-            f" -- {state}" + (f", {failed} failed" if failed else "")
-        )
-        for item in missing[:10]:
-            print(f"    missing {item}")
-        if len(missing) > 10:
-            print(f"    ... and {len(missing) - 10} more")
 
 
 def run(name: str) -> None:
@@ -382,7 +296,6 @@ if __name__ == "__main__":
             "install",
             "make",
             "run",
-            "status",
             "receive",
             "clean",
         ],
@@ -398,8 +311,6 @@ if __name__ == "__main__":
         install()
     elif args.cmd == "make":
         make(args.sweep)
-    elif args.cmd == "status":
-        status(args.sweep)
     elif args.cmd == "receive":
         receive(args.sweep)
     elif args.cmd == "clean":

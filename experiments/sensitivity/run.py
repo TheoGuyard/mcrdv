@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Sensitivity: one instance parameter at a time, on generated clouds."""
-
 import math
 import sys
 from pathlib import Path
@@ -16,14 +14,6 @@ from _common import analysis, driver, planners  # noqa: E402
 
 
 def spread(problem: Problem) -> float:
-    """Mean angular distance of the targets from their common RAAN [deg].
-
-    What "how spread out the debris is" means in the quantity a transfer
-    actually pays for. The kick that generated the cloud is the knob a sweep
-    turns; this is what that knob produced, which is what a figure should be
-    read against -- a kick in metres per second means nothing to a reader, and
-    forty degrees of right ascension means a great deal.
-    """
     angles = np.array([problem.states[t].r for t in problem.targets])
     if not angles.size:
         return 0.0
@@ -35,13 +25,6 @@ def spread(problem: Problem) -> float:
 
 
 def shape(problem: Problem) -> dict:
-    """The instance's own numbers, each one a figure's abscissa.
-
-    Every swept parameter is recorded as the number it ended up being, rather
-    than as whatever the configuration wrote: a horizon is `365d` in a file and
-    365 on an axis, and a figure that had to group by the string would get a
-    bar chart where it wanted a curve.
-    """
     return {
         "num_chasers": problem.num_chasers,
         "max_load": problem.max_load,
@@ -52,15 +35,6 @@ def shape(problem: Problem) -> dict:
 
 
 def execute(config: dict) -> dict:
-    """Solve, and report what it cost to run and what it produced.
-
-    Two families of numbers, which are the two halves of the question this
-    experiment asks. The wall clock, split between setup and search because
-    they scale differently -- setup tabulates per-leg bounds and is quadratic
-    in the catalogue, the search is what the paper is about. And the shape of
-    the plan that came back: how much of the swarm was used, how full each
-    chaser is, how long the mission runs, how much of it is spent waiting.
-    """
     result = planners.solve(config)
     problem = planners.problem(config)
 

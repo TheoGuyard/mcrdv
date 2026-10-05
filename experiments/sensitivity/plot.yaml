@@ -1,18 +1,12 @@
-# One block of figures per swept parameter. `sweep.axis` selects the runs that
-# moved that parameter -- the campaign tags every run with it -- and `group_by`
-# names the column holding what it was moved to, which `run.py` records as a
-# number so every axis is a curve rather than a row of bars.
-#
-# Three questions of each parameter: what it costs to solve (`time`), what the
-# mission costs (`cost`), and what the plan looks like (`structure`).
 source:
   folder: results
 
 figures:
-  # ---------------------------------------------------------------- debris --
   - name: time_debris
     draw: time
-    source: {select: {sweep.axis: instance.num_targets}}
+    source:
+      select:
+        sweep.axis: instance.num_targets
     group_by: num_targets
     value: t_setup
     reduce: median+iqr
@@ -23,7 +17,9 @@ figures:
 
   - name: cost_per_target_debris
     draw: cost
-    source: {select: {sweep.axis: instance.num_targets}}
+    source:
+      select:
+        sweep.axis: instance.num_targets
     group_by: num_targets
     value: cost_per_target
     reduce: median+iqr
@@ -33,7 +29,9 @@ figures:
 
   - name: throughput_debris
     draw: throughput
-    source: {select: {sweep.axis: instance.num_targets}}
+    source:
+      select:
+        sweep.axis: instance.num_targets
     group_by: num_targets
     value: throughput
     reduce: median+iqr
@@ -43,7 +41,9 @@ figures:
 
   - name: cost_spread
     draw: cost
-    source: {select: {sweep.axis: instance.cloud.kick}}
+    source:
+      select:
+        sweep.axis: instance.cloud.kick
     group_by: spread_deg
     value: cost
     reduce: median+iqr
@@ -53,7 +53,9 @@ figures:
 
   - name: cost_horizon
     draw: cost
-    source: {select: {sweep.axis: instance.max_time}}
+    source:
+      select:
+        sweep.axis: instance.max_time
     group_by: horizon_days
     value: cost
     reduce: median+iqr
@@ -63,7 +65,9 @@ figures:
 
   - name: cost_load
     draw: cost
-    source: {select: {sweep.axis: instance.max_load}}
+    source:
+      select:
+        sweep.axis: instance.max_load
     group_by: max_load
     value: cost
     reduce: median+iqr

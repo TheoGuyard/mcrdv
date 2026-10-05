@@ -21,8 +21,7 @@ line of arithmetic on top.
 
 from __future__ import annotations
 
-import math
-from typing import Any, Dict, Mapping, NamedTuple, Sequence
+from typing import Any, Dict, Mapping, NamedTuple
 
 import numpy as np
 from numba import njit
@@ -432,13 +431,3 @@ def score(
         "blackout_departures": inside,
         "blackout_share": inside / departures if departures else 0.0,
     }
-
-
-def windows(horizon: float, period: float, duration: float) -> Sequence:
-    """Every window over a mission, as `(start, end)` pairs, for drawing."""
-    count = int(math.ceil(horizon / period))
-    return [
-        (k * period, min(k * period + duration, horizon))
-        for k in range(count + 1)
-        if k * period < horizon
-    ]
