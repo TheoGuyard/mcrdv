@@ -1,8 +1,8 @@
 source:
   folder: results
   select:
-    instance.name: cosmos2251
-    instance.num_chasers: 80
+    instance.name: iridium33
+    instance.num_chasers: 15
     instance.max_load: 10
     instance.max_time: 365d
 

@@ -1,0 +1,114 @@
+source:
+  folder: results
+
+figures:
+  # Narayanaswamy et al. (2023): their tours of the ODRC and the search's,
+  # one chaser, priced on our Q-law with J2.
+  - name: odrc_tours
+    draw: tours
+    source:
+      select:
+        instance.name: odrc
+        solver.args.transfer.type: qlaw
+    reduce: raw
+    xlabel: tour
+    ylabel: delta-v [km/s]
+    xname: tour
+
+  # The same tours on their own dynamics: orbits frozen at the epoch, no J2.
+  - name: odrc_tours_frozen
+    draw: tours
+    source:
+      select:
+        instance.name: odrc
+        solver.args.transfer.type: qlaw_frozen
+        waiting: false
+    reduce: raw
+    xlabel: tour
+    ylabel: delta-v [km/s]
+    xname: tour
+
+  - name: odrc_chasers
+    draw: chasers
+    source:
+      select:
+        instance.name: odrc
+        solver.args.transfer.type: qlaw
+    reduce: raw
+    xlabel: chasers
+    ylabel: delta-v [km/s]
+    xname: chasers
+
+  # López Rivera & Naeije (2025): missions drawn as theirs are, on their
+  # transfer model and spacecraft, one chaser, no wait.
+  - name: lopez_rivera_dv
+    draw: lopez_rivera
+    source:
+      select:
+        instance.name: iridium33_rivera
+    reduce: raw
+    xlabel: targets
+    ylabel: mean delta-v [km/s]
+    xname: targets
+
+  - name: lopez_rivera_gap
+    draw: lopez_rivera_gap
+    source:
+      select:
+        instance.name: iridium33_rivera
+    reduce: raw
+    xlabel: targets
+    ylabel: mean gap to the reference [%]
+    xname: targets
+
+  # Zona et al. (2023): Cerf's debris, their transfer model and grid.
+  - name: zona_2at10
+    draw: horizon
+    case: [2, 10]
+    source:
+      select:
+        instance.name: cerf21
+        instance.num_chasers: 2
+        num_targets: 10
+    reduce: raw
+    xlabel: horizon [days]
+    ylabel: delta-v [m/s]
+    xname: days
+
+  - name: zona_3at10
+    draw: horizon
+    case: [3, 10]
+    source:
+      select:
+        instance.name: cerf21
+        instance.num_chasers: 3
+        num_targets: 10
+    reduce: raw
+    xlabel: horizon [days]
+    ylabel: delta-v [m/s]
+    xname: days
+
+  - name: zona_4at21
+    draw: horizon
+    case: [4, 21]
+    source:
+      select:
+        instance.name: cerf21
+        instance.num_chasers: 4
+        num_targets: 21
+    reduce: raw
+    xlabel: horizon [days]
+    ylabel: delta-v [m/s]
+    xname: days
+
+  - name: zona_swarm
+    draw: swarm
+    source:
+      select:
+        instance.name: cerf21
+        instance.max_time: 720d
+        num_targets: 21
+    reduce: raw
+    xlabel: chasers
+    ylabel: delta-v [m/s]
+    xname: chasers

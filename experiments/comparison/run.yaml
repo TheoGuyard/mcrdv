@@ -1,0 +1,20 @@
+name: comparison
+description: mcrdv beside planners of the literature, on their instances.
+seed: 0
+
+# Narayanaswamy et al. (2023): twelve Iridium-33 fragments of the ODRC, the
+# first row of the catalogue being the orbit their deorbiter starts from.
+instance:
+  name: odrc
+  depot: first
+  num_chasers: 1
+  max_load: 12
+  max_time: 6y
+
+# Their NEXT thruster: 0.236 N on a 700 kg spacecraft.
+solver:
+  type: mcrdv
+  args:
+    transfer: {type: qlaw, args: {thrust: 3.3714e-4}}
+    schedule: {type: dp}
+    sequence: {type: hgs, args: {preset: 5, max_time: 2m}}

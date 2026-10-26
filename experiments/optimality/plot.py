@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from _common import export, plotting, tidy  # noqa: E402
+from _common import plotter  # noqa: E402
 
 
 def _planners(rows):
@@ -26,7 +26,7 @@ def gap(ax, data):
     sizes = _sizes(data.rows)
     for name in _planners(data.rows):
         means = [
-            tidy.column(
+            plotter.column(
                 [
                     r
                     for r in data.rows
@@ -36,7 +36,7 @@ def gap(ax, data):
             )
             for n in sizes
         ]
-        export.line(
+        plotter.line(
             ax,
             sizes,
             [m.mean() if m.size else np.nan for m in means],
@@ -66,7 +66,7 @@ def optimal(ax, data):
                 if members
                 else np.nan
             )
-        export.line(
+        plotter.line(
             ax, sizes, share, name=_column(name), label=name, marker="o"
         )
     ax.set_ylim(-5.0, 105.0)
@@ -77,4 +77,4 @@ DRAW_MAP = {"gap": gap, "optimal": optimal}
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))

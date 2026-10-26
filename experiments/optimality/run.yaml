@@ -1,5 +1,5 @@
 name: optimality
-description: Sequence layer against the exact optimum sequencing (small instances only).
+description: Sequence layer against optimum sequencing (small instances only).
 seed: 0
 
 instance:

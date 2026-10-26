@@ -1,8 +1,6 @@
-"""Turning configurations into mission planners, and the problem it solves.
+"""Solving with mcrdv: from a configuration to a problem, a stack, a result.
 
-A configuration names what solves an instance under `solver`, and everything
-named is written the same way: a `type`, and the `args` it is built from.
-
+    instance: {name: iridium33, num_chasers: 15, max_load: 10, max_time: 365d}
     solver:
       type: mcrdv
       args:
@@ -10,10 +8,19 @@ named is written the same way: a `type`, and the `args` it is built from.
         schedule: {type: dp, args: {grid_size: 32}}
         sequence: {type: hgs, args: {preset: 3, max_time: 3m}}
 
-mcrdv's arguments are its three layers, each written as a `type` and its own
-`args`, so the same shape nests all the way down. Another solver registers
-itself in `SOLVERS` and gives whatever `args` it wants; nothing else in the
-harness knows what any of them mean.
+`instance` options:
+- `name`: a catalogue in `data/`, or a generated instance (see `GENERATORS`)
+  shaped by `cloud`.
+- `num_targets` + `draw`: a random subset of a catalogue (a smaller subset of
+  one draw is contained in every larger one), or the size of a generated one.
+- `pick`: targets named by their 1-based row in the catalogue, in that order.
+- `depot`: `centroid` (default, the targets' mean orbit) or `first` (the
+  catalogue's first row, which is then not a target; a generated instance
+  departs from the first row of the catalogue of its name).
+
+Every `solver` entry is a `type` plus the `args` it is built with. Layer types
+are looked up in `TRANSFERS`, `SCHEDULES` and `SEQUENCES`, which hold the
+layers mcrdv ships; an experiment adds its own layers to them in its `run.py`.
 """
 
 from __future__ import annotations
@@ -24,83 +31,73 @@ import time
 from dataclasses import fields
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Sequence, Tuple
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 
-from mcrdv import Problem, centroid, load_states
-from mcrdv.orbit import KepState
+from mcrdv import MissionPlan, Problem, centroid, load_states
+from mcrdv.orbit import TAU, KepState
 from mcrdv.planner import ScheduleLayer, SequenceLayer, TransferLayer
+from mcrdv.problem import ChaserPlan
 from mcrdv.schedule import DpSchedule
 from mcrdv.sequence import ClusterSequence, HgsSequence
-from mcrdv.sequence.hgs import HgsConfig
+from mcrdv.sequence.hgs import HgsConfig, mean_raan
 from mcrdv.transfer import QlawTransfer
 
-from . import config as configuration
-from . import synthetic
-from .transfers import (
-    ArrivalQlawTransfer,
-    BlackoutQlawTransfer,
-    EmbargoQlawTransfer,
-    UrgencyQlawTransfer,
-)
+from . import runner
 
 # Catalogues live at the repository root, beside `experiments/`.
 DATA = Path(__file__).resolve().parents[2] / "data"
 
+# Where the chasers may start.
+DEPOTS = ("centroid", "first")
+
+# Generated instances: `instance.name` -> `(count, draw, **cloud) -> states`.
+GENERATORS: Dict[str, Callable[..., Sequence[KepState]]] = {}
+
+# Layer types a configuration can name; experiments add their own.
+TRANSFERS: Dict[str, Any] = {"qlaw": QlawTransfer}
+SCHEDULES: Dict[str, Any] = {"dp": DpSchedule}
+SEQUENCES: Dict[str, Any] = {"hgs": HgsSequence, "cluster": ClusterSequence}
+
 # Where a configuration names what solves it.
 SOLVER = "solver"
 
-# `(config) -> result`: what running one solver on one configuration produces.
+# `(config) -> result`: one solver run on one configuration.
 Runner = Callable[[Mapping[str, Any]], Dict[str, Any]]
 
-# Solvers a configuration can name, filled in by `register` below.
+# Solvers a configuration can name, filled in by `register`.
 SOLVERS: Dict[str, Runner] = {}
 
-# The layers of the mcrdv stack, outermost last: `solver.args` holds one entry
-# per name, and each is a `type` with its own `args`.
+# The layers of the mcrdv stack, each a key of `solver.args`.
 STACK = ("transfer", "schedule", "sequence")
 
-# Names accepted in a configuration, per layer of the mcrdv stack. The four
-# beside the shipped Q-law are written in `transfers.py`, and are what the
-# `transfer` experiment is about.
-TRANSFERS = {
-    "qlaw": QlawTransfer,
-    "qlaw_arrival": ArrivalQlawTransfer,
-    "qlaw_urgency": UrgencyQlawTransfer,
-    "qlaw_blackout": BlackoutQlawTransfer,
-    "qlaw_embargo": EmbargoQlawTransfer,
-}
-SCHEDULES = {"dp": DpSchedule}
-SEQUENCES = {"hgs": HgsSequence, "cluster": ClusterSequence}
-
-# Search knobs that are times, and so accept `60s` / `5m` style strings.
+# Search knobs given as durations (`60s`, `5m`).
 _DURATIONS = ("max_time",)
 
-# What `HgsSequence` alone understands: its preset, and the fields of the
-# search configuration its arguments are flattened into.
+# What only `HgsSequence` understands: its preset and `HgsConfig` fields.
 _SEARCH_KNOBS = {"preset"} | {field.name for field in fields(HgsConfig)}
 
 
 # ============================================================================ #
-# Problems
+# Instances
 # ============================================================================ #
 
 
 @lru_cache(maxsize=None)
 def _states(name: str) -> Tuple[KepState, ...]:
-    """The catalogue `name`, read once per process."""
+    """A catalogue, read once per process."""
     return tuple(load_states(DATA / f"{name}.csv"))
 
 
 @lru_cache(maxsize=None)
-def _subset(name: str, count: int, draw: int) -> Tuple[KepState, ...]:
-    """`count` targets of the catalogue `name`, in catalogue order.
-
-    The prefix of one random permutation, so for a given draw a smaller subset
-    is contained in every larger one.
-    """
-    states = _states(name)
+def _subset(
+    name: str, count: int, draw: int, skip: int = 0
+) -> Tuple[KepState, ...]:
+    """`count` targets drawn from the catalogue, in catalogue order, never
+    from its first `skip` rows."""
+    states = _states(name)[skip:]
     if not 1 <= count <= len(states):
         raise ValueError(
             f"cannot draw {count} targets from {name}, "
@@ -111,35 +108,61 @@ def _subset(name: str, count: int, draw: int) -> Tuple[KepState, ...]:
 
 
 @lru_cache(maxsize=None)
-def _cloud(count: int, draw: int, shape: str) -> Tuple[KepState, ...]:
-    """A synthetic cloud, generated once per process. `shape` is the
-    `instance.cloud` mapping as JSON, which is what makes it cacheable."""
-    return tuple(synthetic.cloud(count, draw, **json.loads(shape)))
+def _picked(
+    name: str, rows: Tuple[int, ...], skip: int = 0
+) -> Tuple[KepState, ...]:
+    """The targets at the 1-based `rows`, counted after the first `skip`."""
+    states = _states(name)[skip:]
+    for row in rows:
+        if not 1 <= row <= len(states):
+            raise ValueError(f"{name} has no target {row}")
+    if len(set(rows)) != len(rows):
+        raise ValueError(f"a target is picked twice from {name}")
+    return tuple(states[row - 1] for row in rows)
+
+
+@lru_cache(maxsize=None)
+def _generated(
+    name: str, count: int, draw: int, shape: str
+) -> Tuple[KepState, ...]:
+    """A generated instance; `shape` is `instance.cloud` as JSON, hashable."""
+    return tuple(GENERATORS[name](count, draw, **json.loads(shape)))
+
+
+def depot(config: Mapping[str, Any]) -> str:
+    """Where the chasers start: `centroid` or `first`."""
+    kind = str(runner.get(config, "instance.depot", "centroid"))
+    if kind not in DEPOTS:
+        known = ", ".join(DEPOTS)
+        raise ValueError(f"unknown depot '{kind}' (known: {known})")
+    return kind
 
 
 def targets(config: Mapping[str, Any]) -> Tuple[KepState, ...]:
-    """The targets an instance describes.
+    """The targets an instance describes (see the module docstring)."""
+    name = str(runner.get(config, "instance.name"))
+    count = runner.get(config, "instance.num_targets")
+    draw = int(runner.get(config, "instance.draw", 0))
+    pick = runner.get(config, "instance.pick")
+    skip = 1 if depot(config) == "first" else 0
 
-    `instance.name` is a catalogue in `data/`, or `synthetic` for a generated
-    break-up cloud shaped by `instance.cloud` (see `synthetic.py`).
-    `instance.num_targets` sizes a synthetic cloud, and draws that many targets
-    from a catalogue, which is otherwise taken whole. `instance.draw` seeds
-    which targets those are. It is a separate knob from the run's `seed`
-    because the two are separate axes: replications of a search on one
-    instance, and different instances of one size.
-    """
-    name = str(configuration.get(config, "instance.name"))
-    count = configuration.get(config, "instance.num_targets")
-    draw = int(configuration.get(config, "instance.draw", 0))
+    if pick is not None:
+        if count is not None:
+            raise ValueError("'pick' and 'num_targets' are exclusive")
+        return _picked(name, tuple(int(row) for row in pick), skip)
 
-    if name == synthetic.NAME:
+    if name in GENERATORS:
         if count is None:
-            raise ValueError("a synthetic instance needs 'num_targets'")
-        shape = configuration.get(config, "instance.cloud") or {}
-        return _cloud(int(count), draw, json.dumps(shape, sort_keys=True))
+            raise ValueError(f"a {name} instance needs 'num_targets'")
+        if skip and not (DATA / f"{name}.csv").exists():
+            raise ValueError(f"a {name} cloud has no first row to depart from")
+        shape = runner.get(config, "instance.cloud") or {}
+        return _generated(
+            name, int(count), draw, json.dumps(shape, sort_keys=True)
+        )
     if count is None:
-        return _states(name)
-    return _subset(name, int(count), draw)
+        return _states(name)[skip:]
+    return _subset(name, int(count), draw, skip)
 
 
 def num_targets(config: Mapping[str, Any]) -> int:
@@ -147,34 +170,29 @@ def num_targets(config: Mapping[str, Any]) -> int:
 
 
 def problem(config: Mapping[str, Any]) -> Problem:
+    """The `Problem` an instance describes, the depot as state 0."""
     chosen = list(targets(config))
-    states = [centroid(chosen)] + chosen
+    if depot(config) == "first":
+        start = _states(str(runner.get(config, "instance.name")))[0]
+    else:
+        start = centroid(chosen)
+    states = [start] + chosen
     return Problem(
         states,
-        int(configuration.get(config, "instance.num_chasers")),
-        float(
-            configuration.duration(
-                configuration.get(config, "instance.max_time")
-            )
-        ),
-        int(configuration.get(config, "instance.max_load")),
+        int(runner.get(config, "instance.num_chasers")),
+        float(runner.duration(runner.get(config, "instance.max_time"))),
+        int(runner.get(config, "instance.max_load")),
     )
 
 
 # ============================================================================ #
-# Layers
+# Stacks
 # ============================================================================ #
 
 
 def spec(node: Any) -> Tuple[str, Dict[str, Any]]:
-    """The `type` and the `args` of whatever a configuration names.
-
-    One shape for a solver and for a layer alike, which is what lets a solver's
-    arguments hold layers written exactly like the solver itself. A key beside
-    the two is an error rather than something quietly ignored: `grid_size`
-    written at the top of a layer is a configuration that meant to say
-    `args: {grid_size: ...}`, and saying so is cheaper than a silent default.
-    """
+    """The `type` and `args` of a solver or a layer. Any other key is an
+    error: a knob written beside `type` belongs under `args`."""
     if node is None:
         node = {}
     if not isinstance(node, Mapping):
@@ -193,22 +211,16 @@ def spec(node: Any) -> Tuple[str, Dict[str, Any]]:
 
 def layer(config: Mapping[str, Any], name: str) -> Tuple[str, Dict[str, Any]]:
     """The `type` and `args` of one layer of the mcrdv stack."""
-    return spec(configuration.get(config, f"{SOLVER}.args.{name}"))
+    return spec(runner.get(config, f"{SOLVER}.args.{name}"))
 
 
 def solver_type(config: Mapping[str, Any]) -> str:
-    """The solver a configuration names, `mcrdv` when it names none."""
-    return spec(configuration.get(config, SOLVER))[0] or "mcrdv"
+    """The solver a configuration names, `mcrdv` by default."""
+    return spec(runner.get(config, SOLVER))[0] or "mcrdv"
 
 
 def register(name: str) -> Callable[[Runner], Runner]:
-    """Register a solver under `name`, as a decorator.
-
-    A solver is `(config) -> result`: it reads a configuration, solves whatever
-    that describes, and returns the columns worth keeping. Registering one is
-    all the harness needs -- sweeping, chunking, recording and plotting do not
-    know what a solver is.
-    """
+    """Decorator registering a `(config) -> result` solver under `name`."""
 
     def keep(runner: Runner) -> Runner:
         SOLVERS[name] = runner
@@ -218,7 +230,7 @@ def register(name: str) -> Callable[[Runner], Runner]:
 
 
 def _pick(table: Dict[str, Any], kind: str, default: str, what: str) -> Any:
-    """What is registered under `kind`, or the default when none is named."""
+    """What is registered under `kind`, or under `default` if none is named."""
     chosen = kind or default
     if chosen not in table:
         known = ", ".join(sorted(table))
@@ -231,20 +243,6 @@ def transfer(config: Mapping[str, Any]) -> TransferLayer:
     return _pick(TRANSFERS, kind, "qlaw", "transfer")(**args)
 
 
-def delta_v(config: Mapping[str, Any]) -> TransferLayer:
-    """The configured Q-law with its objective stripped: it prices delta-v.
-
-    Plans built under different cost oracles are only comparable on the same
-    physical scale, so this re-reads them with the thrust and the estimate the
-    run flew with, and nothing it was optimizing. Only those two knobs are
-    kept: what an oracle weighs, forbids or hurries is exactly what this is
-    stripping away.
-    """
-    _, args = layer(config, "transfer")
-    physics = {k: v for k, v in args.items() if k in ("thrust", "factor")}
-    return QlawTransfer(**physics)
-
-
 def schedule(config: Mapping[str, Any]) -> ScheduleLayer:
     kind, args = layer(config, "schedule")
     inner = transfer(config)
@@ -252,24 +250,14 @@ def schedule(config: Mapping[str, Any]) -> ScheduleLayer:
 
 
 def hgs_config(node: Any, seed: int) -> HgsConfig:
-    """Build the search configuration, with the run's seed forced in.
-
-    The seed belongs to the run, not to the search knobs: replications are an
-    axis of a campaign, so a `seed:` written among the sequence layer's
-    arguments would silently make every replication identical.
-
-    Every other knob is taken as written, including `log_save` -- whether a run
-    keeps its search log is a property of the experiment being run, so it
-    belongs in the configuration that describes it and nowhere else. The one
-    imposition is that the search stays quiet unless asked: a run reports
-    through the driver, and a per-iteration log interleaved with that helps
-    nobody.
-    """
+    """The search configuration, with the run's `seed` forced in (a seed among
+    the layer's args would make every replication identical) and the search
+    quiet unless `verbose` is asked for."""
     knobs = copy.deepcopy(dict(node)) if isinstance(node, Mapping) else {}
     knobs.pop("seed", None)
     for key in _DURATIONS:
         if key in knobs:
-            knobs[key] = configuration.duration(knobs[key])
+            knobs[key] = runner.duration(knobs[key])
     knobs["seed"] = int(seed)
     knobs.setdefault("verbose", False)
 
@@ -283,27 +271,23 @@ def sequence(config: Mapping[str, Any]) -> SequenceLayer:
     inner = schedule(config)
     kind, args = layer(config, "sequence")
     cls = _pick(SEQUENCES, kind, "hgs", "sequence")
-    seed = int(configuration.get(config, "seed", 0))
+    seed = int(runner.get(config, "seed", 0))
 
     if cls is HgsSequence:
         return HgsSequence(schedule=inner, config=hgs_config(args, seed))
 
-    # A campaign that sweeps the sequence layer shares one base configuration,
-    # so a layer with no search of its own is handed search knobs that mean
-    # nothing to it. Dropping the ones that belong to the search is what lets
-    # `hgs` and `cluster` be two values of a single axis; anything else is
-    # still passed through, and still an error if it is wrong.
+    # A layer with no search ignores the search knobs a shared base hands it,
+    # so `hgs` and another layer can be two values of one sweep axis.
     knobs = {k: v for k, v in args.items() if k not in _SEARCH_KNOBS}
     return cls(inner, **knobs)
 
 
 # ============================================================================ #
-# Warm-up
+# Warm-up and solving
 # ============================================================================ #
 
 
-# The warm-up instance: the smallest catalogue, solved only to trigger
-# compilation.
+# A throwaway instance, solved only to trigger compilation.
 _WARMUP = {
     "instance": {
         "name": "cosmos1408",
@@ -321,34 +305,23 @@ def _shape(config: Mapping[str, Any]) -> tuple:
 
 
 def warm_up(configs: Sequence[Mapping[str, Any]]) -> None:
-    """Pay the numba compilation of every stack this task will use.
-
-    Compiling costs eight to twelve seconds and is then free for the rest of the
-    process. Doing it here, on a throwaway four-target instance, keeps it out of
-    the measured runs -- otherwise the first run of a task carries ten seconds
-    that have nothing to do with the instance it reports on.
-
-    Every distinct combination of layer types is warmed, not just the first: an
-    experiment comparing two sequence layers compiles two separate kernels, and
-    warming only one leaves the other's compilation inside a measured run.
-
-    Configurations naming another solver are skipped: there is nothing here to
-    compile for them, and whatever they need is their own business.
-    """
+    """Pay numba's compilation (about ten seconds) for every distinct stack
+    the configurations use, before any run is timed. Other solvers are
+    skipped."""
     instance = problem(_WARMUP)
     stacks = dict.fromkeys(
         _shape(config) for config in configs if solver_type(config) == "mcrdv"
     )
     for shape in stacks:
-        warm = configuration.derive(
+        warm = runner.derive(
             _WARMUP,
             solver={
                 "type": "mcrdv",
                 "args": {
                     "transfer": {"type": shape[0]},
                     "schedule": {"type": shape[1]},
-                    # The shallowest preset compiles the whole search; it
-                    # simply does not enter the genetic loop.
+                    # The shallowest preset compiles the search without
+                    # entering the genetic loop.
                     "sequence": {"type": shape[2], "args": {"preset": 0}},
                 },
             },
@@ -358,34 +331,17 @@ def warm_up(configs: Sequence[Mapping[str, Any]]) -> None:
         stack.evaluate()
 
 
-# ============================================================================ #
-# Running
-# ============================================================================ #
-
-
 def solve(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Run the solver a configuration names, and return what it produced.
-
-    The one entry point an experiment's `execute` needs: which solver runs is
-    `solver.type`, and what it is given is `solver.args`.
-    """
+    """Run the solver a configuration names, and return its result."""
     return _pick(SOLVERS, solver_type(config), "mcrdv", "solver")(config)
 
 
 @register("mcrdv")
 def mcrdv(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Build the stack from `solver.args`, solve, and report the usual numbers.
+    """Build the stack, solve, and report the plan with the usual numbers.
 
-    Setup and search are timed apart because they scale differently: setup
-    builds the table of per-leg bounds, which is quadratic in the catalogue size
-    and reaches twenty seconds on the largest one, while the search is what the
-    paper is about. Summing them would hide the term that actually grows.
-
-    The configuration decides everything, this function nothing: a run that
-    wants its search log kept says `log_save: true` among the sequence layer's
-    arguments, and the returned trace is empty otherwise. That keeps what an
-    experiment does readable from the file that describes it, rather than split
-    between a configuration and the argument some script happened to pass.
+    Setup (the per-leg bound table) and search are timed apart. The search
+    trace is empty unless the sequence layer's args ask for `log_save`.
     """
     stack = sequence(config)
     instance = problem(config)
@@ -407,13 +363,10 @@ def mcrdv(config: Mapping[str, Any]) -> Dict[str, Any]:
         "num_targets": num_targets(config),
         "t_setup": setup,
         "t_solve": solve_time,
-        # Genetic iterations completed, `None` for a layer with no search. At a
-        # fixed budget this is the search's throughput.
+        # Genetic iterations completed; `None` for a layer with no search.
         "iterations": getattr(
             getattr(stack, "context", None), "iteration", None
         ),
-        # Empty unless a trace was asked for, so this needs no condition: the
-        # layer simply kept nothing.
         "trace": [
             {
                 "time": e.time,
@@ -428,4 +381,89 @@ def mcrdv(config: Mapping[str, Any]) -> Dict[str, Any]:
             }
             for e in (getattr(stack, "trace", ()) or ())
         ],
+    }
+
+
+# ============================================================================ #
+# Reading a plan (times in seconds, angles in radians)
+# ============================================================================ #
+
+
+def waiting(plan: ChaserPlan) -> np.ndarray:
+    """Time waited at each visited state before leaving it (the last one,
+    which nothing leaves, excluded)."""
+    if len(plan) < 2:
+        return np.zeros(0)
+    return np.maximum(plan.depart[:-1] - plan.arrive[:-1], 0.0)
+
+
+def raan_spread(plan: ChaserPlan, problem: Problem) -> float:
+    """Largest angular distance of a plan's targets to their circular mean,
+    each node read at the time it is visited."""
+    if plan.load == 0:
+        return 0.0
+    centre = mean_raan(SimpleNamespace(problem=problem), plan)
+    states = problem.states
+    worst = 0.0
+    for target, when in zip(plan.sequence[1:], plan.depart[1:]):
+        angle = states[target].r + states[target].dr * when
+        delta = abs(angle - centre) % TAU
+        worst = max(worst, min(delta, TAU - delta))
+    return worst
+
+
+def per_chaser(mission: MissionPlan, problem: Problem) -> List[Dict[str, Any]]:
+    """One row per chaser, idle ones included."""
+    rows = []
+    for index, plan in enumerate(mission.plans):
+        pauses = waiting(plan)
+        rows.append(
+            {
+                "chaser": index,
+                "load": plan.load,
+                "cost": plan.cost,
+                "time": plan.time,
+                "feasible": plan.feasible,
+                "excess_load": plan.excess_load,
+                "excess_time": plan.excess_time,
+                "wait_total": float(pauses.sum()),
+                "wait_max": float(pauses.max()) if pauses.size else 0.0,
+                "leg_cost_mean": (
+                    float(plan.costs[1:].mean()) if plan.load else 0.0
+                ),
+                "leg_cost_max": (
+                    float(plan.costs[1:].max()) if plan.load else 0.0
+                ),
+                "raan_spread": raan_spread(plan, problem),
+            }
+        )
+    return rows
+
+
+def mission_metrics(mission: MissionPlan, problem: Problem) -> Dict[str, Any]:
+    """The shape of a mission plan, as one row of a results table."""
+    rows = per_chaser(mission, problem)
+    active = [row for row in rows if row["load"] > 0]
+    loads = np.array([row["load"] for row in active], dtype=np.float64)
+    costs = np.array([row["cost"] for row in active], dtype=np.float64)
+
+    if not active:
+        return {"active_chasers": 0, "idle_chasers": len(rows)}
+
+    return {
+        "active_chasers": len(active),
+        "idle_chasers": len(rows) - len(active),
+        "load_min": int(loads.min()),
+        "load_max": int(loads.max()),
+        "load_mean": float(loads.mean()),
+        # 0 when every active chaser carries the same load.
+        "load_imbalance": float(loads.max() / loads.mean() - 1.0),
+        "cost_min": float(costs.min()),
+        "cost_max": float(costs.max()),
+        "cost_mean": float(costs.mean()),
+        "makespan": float(max(row["time"] for row in rows)),
+        "wait_total": float(sum(row["wait_total"] for row in rows)),
+        "raan_spread_mean": float(
+            np.mean([row["raan_spread"] for row in active])
+        ),
     }

@@ -1,19 +1,14 @@
-"""Shared core of the mcrdv paper experiments.
+"""Code shared by the mcrdv experiments.
 
-Every experiment folder holds a `run.yaml` describing exactly one run, a
-`run.py` saying how to perform it, a `plot.yaml` selecting results, and a
-`plot.py` drawing them. Sweeping across many runs is a separate concern and
-lives in `experiments/sweeps.yaml`, which `experiments/script.py` expands.
+    runner     configurations, sweeps.yaml campaigns, the `run.py` loop and
+                its records (knows nothing of mcrdv)
+    planners    `instance:` -> Problem, `solver:` -> mcrdv stack, solving, and
+                the metrics of a plan
+    plotter    `plot.yaml` -> figures, and their export to pgfplots (knows
+                nothing of mcrdv)
 
-The modules below split along one line. `config`, `record`, `driver`,
-`generate` and `plotting` know nothing about what an experiment solves, so an
-experiment driving some planner other than mcrdv still gets sweeping, chunking,
-recording and plotting for free. `planners` and `analysis` are where knowledge
-of mission planners lives, alongside what the experiments add to mcrdv:
-generated instances (`synthetic`), the exact optimum of small instances
-(`exact`) and the schedule-layer bench (`benchmark`).
+Code used by a single experiment lives in its own `run.py` or `plot.py`: its
+layers register themselves in `planners.TRANSFERS`, `SCHEDULES`, `SEQUENCES`
+(and generated instances in `planners.GENERATORS`), so configurations reach
+them by name.
 """
-
-from . import config, driver, generate, planners, record
-
-__all__ = ["config", "driver", "generate", "planners", "record"]

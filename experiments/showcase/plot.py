@@ -11,7 +11,10 @@ from matplotlib.ticker import MultipleLocator  # noqa: E402
 from mcrdv.orbit import DAY  # noqa: E402
 from mcrdv.problem import DEPOT  # noqa: E402
 
-from _common import analysis, export, plotting, style  # noqa: E402
+from _common import plotter  # noqa: E402
+
+# The orbital elements `run.py` records a track of, one figure each.
+ELEMENTS = ("a", "e", "i", "raan", "argp", "anomaly")
 
 _DEGREES = 180.0 / math.pi
 
@@ -87,7 +90,7 @@ def _drift(ax, data, element):
     for state in range(1, start.size):
         edges += [0.0, horizon / DAY, np.nan]
         angles += [start[state], start[state] + rate[state] * horizon, np.nan]
-    export.series(ax, "debris", edges, kind="context", **{element: angles})
+    plotter.series(ax, "debris", edges, kind="context", **{element: angles})
 
     swarm = start[DEPOT] + rate[DEPOT] * when
     ax.plot(
@@ -100,7 +103,7 @@ def _drift(ax, data, element):
     )
     # Exported, unlike the targets: it is one line, and it is the line every
     # track starts on.
-    export.series(ax, "swarm", days, **{element: swarm})
+    plotter.series(ax, "swarm", days, **{element: swarm})
 
     # Where each chaser goes. Drawn per chaser so the colours separate;
     # recorded once, as the tidy table a scatter wants.
@@ -110,7 +113,7 @@ def _drift(ax, data, element):
     # one chaser the same grey as the background it has to stand out from, so
     # the colours are sampled across a map wide enough to keep them apart.
     visits = [v for v in best.result.get("visits", []) if element in v]
-    colours = style.distinct(len(visits))
+    colours = plotter.distinct(len(visits))
 
     for order, visit in enumerate(visits):
         at = np.asarray(visit["time"], dtype=float) / DAY
@@ -137,7 +140,7 @@ def _drift(ax, data, element):
         # each is a track of its own, and a single table would have pgfplots
         # join the end of one chaser to the start of the next. `state` rides
         # along unplotted, 0 marking the swarm state each track starts on.
-        export.series(
+        plotter.series(
             ax,
             f"chaser{visit['chaser']}",
             at,
@@ -161,7 +164,7 @@ def timeline(ax, data):
     if record is None or not record.result.get("timeline"):
         return
     rows = sorted(record.result["timeline"], key=lambda r: -r["end"])
-    colours = style.distinct(len(rows))
+    colours = plotter.distinct(len(rows))
 
     # Each interval is exported as the segment it is drawn as: its two ends at
     # the row's height, then a gap. A bar of a given width is a length on the
@@ -196,7 +199,7 @@ def timeline(ax, data):
             f"{100.0 * idle / (flying + idle):.0f}% of their time waiting"
         )
     for kind, (start, height) in spans.items():
-        export.series(ax, kind, start, kind="segments", **{kind: height})
+        plotter.series(ax, kind, start, kind="segments", **{kind: height})
 
 
 def load(ax, data):
@@ -204,7 +207,7 @@ def load(ax, data):
     if record is None:
         return
     active = _active(record)
-    export.grouped_bars(
+    plotter.grouped_bars(
         ax,
         [str(c["chaser"]) for c in active],
         {"targets": [c["load"] for c in active]},
@@ -217,7 +220,7 @@ def cost_time(ax, data):
     if record is None:
         return
     active = _active(record)
-    export.points(
+    plotter.points(
         ax,
         [c["time"] / DAY for c in active],
         [c["cost"] for c in active],
@@ -230,7 +233,7 @@ def spread(ax, data):
     if record is None:
         return
     active = _active(record)
-    export.points(
+    plotter.points(
         ax,
         [np.degrees(c["raan_spread"]) for c in active],
         [c["cost"] / max(c["load"], 1) for c in active],
@@ -247,7 +250,7 @@ def legs(ax, data):
     if not values.size:
         return
     share = 100.0 * np.arange(1, values.size + 1) / values.size
-    export.line(ax, values, share, name="legs")
+    plotter.line(ax, values, share, name="legs")
     # How top-heavy the plan is, in one number: a tenth of the legs carrying
     # most of the cost is the shape worth noticing.
     dearest = values[-max(1, round(0.1 * values.size)) :]
@@ -260,7 +263,7 @@ def legs(ax, data):
 # The assignment drawing for every element the analysis knows about, and the
 # figures about the plan's structure. `plot.yaml` decides which of these a run
 # draws, and what their axes say.
-DRAW_MAP = {element: _drawing(element) for element in analysis.ELEMENTS}
+DRAW_MAP = {element: _drawing(element) for element in ELEMENTS}
 DRAW_MAP.update(
     {
         "timeline": timeline,
@@ -273,4 +276,4 @@ DRAW_MAP.update(
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))

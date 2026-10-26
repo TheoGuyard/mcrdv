@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from _common import export, plotting, tidy  # noqa: E402
+from _common import plotter  # noqa: E402
 
 
 def _capped(rows):
@@ -32,7 +32,7 @@ def pareto(ax, data):
     column = str(data.spec.get("x_value", "t_solve"))
 
     # Every run behind the medians, one mark each.
-    export.points(
+    plotter.points(
         ax,
         [row.get(column) for group in data.groups for row in group],
         [row.get("cost") for group in data.groups for row in group],
@@ -44,13 +44,13 @@ def pareto(ax, data):
 
     # Along the ladder, whatever order the folder happened to be read in.
     order = np.argsort(np.asarray(data.x, dtype=float))
-    spent = [tidy.spread(data.groups[i], column)[0] for i in order]
-    costs = [tidy.spread(data.groups[i], "cost")[0] for i in order]
+    spent = [plotter.spread(data.groups[i], column)[0] for i in order]
+    costs = [plotter.spread(data.groups[i], "cost")[0] for i in order]
     levels = [int(data.x[i]) for i in order]
     capped = [_capped(data.groups[i]) for i in order]
 
     front = _front(spent, costs)
-    export.line(
+    plotter.line(
         ax,
         [spent[i] for i in front],
         [costs[i] for i in front],
@@ -68,7 +68,7 @@ def pareto(ax, data):
         f"{level}*" if hit else f"{level}"
         for level, hit in zip(levels, capped)
     ]
-    export.points(
+    plotter.points(
         ax,
         spent,
         costs,
@@ -97,4 +97,4 @@ DRAW_MAP = {"pareto": pareto}
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))

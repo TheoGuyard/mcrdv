@@ -4,8 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _common import config as configuration  # noqa: E402
-from _common import driver, planners  # noqa: E402
+from _common import runner, planners  # noqa: E402
 
 # How close to its budget a run has to finish to count as having been stopped
 # by the clock rather than by the search deciding it was done.
@@ -25,7 +24,7 @@ def budget(config: dict) -> float:
     _, args = planners.layer(config, "sequence")
     if "max_time" not in args:
         return float("inf")
-    return float(configuration.duration(args["max_time"]))
+    return float(runner.duration(args["max_time"]))
 
 
 def execute(config: dict) -> dict:
@@ -41,4 +40,4 @@ def execute(config: dict) -> dict:
 
 
 if __name__ == "__main__":
-    raise SystemExit(driver.main(__file__, execute, warmup=planners.warm_up))
+    raise SystemExit(runner.main(__file__, execute, warmup=planners.warm_up))

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _common import driver, planners  # noqa: E402
+from _common import runner, planners  # noqa: E402
 
 
 def execute(config: dict) -> dict:
@@ -13,4 +13,4 @@ def execute(config: dict) -> dict:
 
 
 if __name__ == "__main__":
-    raise SystemExit(driver.main(__file__, execute, warmup=planners.warm_up))
+    raise SystemExit(runner.main(__file__, execute, warmup=planners.warm_up))

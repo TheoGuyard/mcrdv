@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from _common import export, plotting, tidy  # noqa: E402
+from _common import plotter  # noqa: E402
 
 
 def _segments(values, keep):
@@ -19,49 +19,55 @@ def _segments(values, keep):
 
 
 def convergence(ax, data):
-    runs = [r for r in data.records if r.result.get("trace")]
-    if not runs:
+    records = [record for record in data.records if record.result.get("trace")]
+    if not records:
         return
 
     curves = [
         (
-            [e["time"] for e in r.result["trace"]],
-            [e["cost"] for e in r.result["trace"]],
-            [float(e["feasible"]) for e in r.result["trace"]],
+            [log["time"] for log in record.result["trace"]],
+            [log["cost"] for log in record.result["trace"]],
+            [float(log["feasible"]) for log in record.result["trace"]],
         )
-        for r in runs
+        for record in records
     ]
 
     horizon = min(max(times) for times, _, _ in curves)
     grid = np.linspace(0.0, horizon, 200)
-    cost = np.vstack([tidy.resample(t, c, grid) for t, c, _ in curves])
-    feasible = np.vstack([tidy.resample(t, f, grid) for t, _, f in curves])
+    cost = np.vstack([plotter.resample(t, c, grid) for t, c, _ in curves])
+    feas = np.vstack([plotter.resample(t, f, grid) for t, _, f in curves])
 
     usable = ~np.isnan(cost).any(axis=0)
-    grid, cost, feasible = grid[usable], cost[:, usable], feasible[:, usable]
+    grid, cost, feas = grid[usable], cost[:, usable], feas[:, usable]
     if grid.size == 0:
         return
 
     median = np.median(cost, axis=0)
-    everywhere = np.nanmin(feasible, axis=0) > 0.0
+    isfeas = np.nanmin(feas, axis=0) > 0.0
 
-    export.band(
+    plotter.band(
         ax,
         grid,
         np.percentile(cost, 25, axis=0),
         np.percentile(cost, 75, axis=0),
         name="iqr",
     )
-    if not everywhere.all():
-        export.line(
+
+    if not isfeas.all():
+        plotter.line(
             ax,
             grid,
-            _segments(median, ~everywhere),
+            _segments(median, ~isfeas),
             name="infeasible",
             linestyle="--",
         )
-    if everywhere.any():
-        export.line(ax, grid, _segments(median, everywhere), name="feasible")
+    if isfeas.any():
+        plotter.line(
+            ax, 
+            grid, 
+            _segments(median, isfeas), 
+            name="feasible"
+        )
 
     ax.set_title(f"{len(curves)} seeds")
 
@@ -70,4 +76,4 @@ DRAW_MAP = {"convergence": convergence}
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))

@@ -1,29 +1,26 @@
 #!/usr/bin/env python3
 """Scripts for running the experiments on the cluster.
-    ./script.py send                # send local workspace to remote cluster
-    ./script.py install             # build the environment there
-    ./script.py make                # write every campaign and its job file
-    ./script.py run -s <name>       # submit one campaign as an array job
-    ./script.py receive -s <name>   # retrieve locally remote results on cluster
-    ./script.py clean               # clear the generated campaigns
+./script.py send                # send local workspace to remote cluster
+./script.py install             # build the environment there
+./script.py make                # write every campaign and its job file
+./script.py run -s <name>       # submit one campaign as an array job
+./script.py receive -s <name>   # retrieve locally remote results on cluster
+./script.py clean               # clear the generated campaigns
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import pathlib
 import shutil
 import subprocess
 import sys
 import textwrap
-from typing import Any, Dict, Iterator, List, Mapping
+from typing import Any, Dict, Mapping
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from _common import config as configuration  # noqa: E402
-from _common import generate  # noqa: E402
-from _common import record as recording  # noqa: E402
+from _common import runner  # noqa: E402
 
 # ----- Global variables ----- #
 
@@ -32,7 +29,6 @@ REM_PATH = "tguyard@rorqual.alliancecan.ca:links/scratch"
 HOME_DIR = "/home/tguyard"
 VENV_DIR = "/home/tguyard/.venv"
 LOGS_DIR = "/home/tguyard/logs"
-ACCOUNT = "def-vidalthi"
 MODULES = ["StdEnv/2023", "python/3.11"]
 REQUIRES = ["numpy", "numba", "pyyaml"]
 
@@ -43,74 +39,14 @@ SWEEPS_PATH = EXPS_DIR / "sweeps.yaml"
 JOB_NAME = "job.sh"
 
 
-# ----- Sweep management ----- #
-
-
-def sweeps() -> Dict[str, Dict[str, Any]]:
-    """Every sweep of `sweeps.yaml`, with the defaults filled in."""
-    if not SWEEPS_PATH.exists():
-        raise SystemExit(f"{SWEEPS_PATH} does not exist")
-    document = configuration.load(SWEEPS_PATH)
-    defaults = document.get("defaults") or {}
-    out = {}
-    for name, sweep in (document.get("sweeps") or {}).items():
-        merged = {**defaults, **(sweep or {})}
-        merged.setdefault("experiment", name)
-        out[name] = merged
-    return out
-
-
 def pick(name: str | None) -> Dict[str, Dict[str, Any]]:
-    """Every sweep, or the one named."""
-    known = sweeps()
+    """Every sweep of `sweeps.yaml`, or the one named."""
+    known = runner.load_sweeps(SWEEPS_PATH)
     if name is None:
         return known
     if name not in known:
         raise SystemExit(f"unknown sweep '{name}'")
     return {name: known[name]}
-
-
-def values(spec: Any) -> List[Any]:
-    """One axis's values: a list as written, or a `range` shorthand."""
-    if isinstance(spec, Mapping):
-        if set(spec) != {"range"}:
-            raise SystemExit(f"an axis is a list or a range, got {spec!r}")
-        bounds = spec["range"]
-        bounds = [bounds] if isinstance(bounds, int) else list(bounds)
-        return list(range(*bounds))
-    if not isinstance(spec, list):
-        raise SystemExit(f"an axis is a list or a range, got {spec!r}")
-    return list(spec)
-
-
-def configs(base: Mapping[str, Any], sweep: Mapping[str, Any]) -> Iterator:
-    """Every configuration a sweep campaign describes."""
-    fixed = sweep.get("set") or {}
-    if not isinstance(fixed, Mapping):
-        raise SystemExit(f"a sweep's 'set' is a mapping, got {fixed!r}")
-    base = configuration.derive(base, **fixed)
-
-    for arm in sweep.get("campaign") or []:
-        axes = dict((arm or {}).get("axes") or {})
-        bundles = [{}]
-        if "set" in axes:
-            bundles = [dict(bundle) for bundle in axes.pop("set")]
-        axes = {path: values(spec) for path, spec in axes.items()}
-        mode = str((arm or {}).get("mode", "grid"))
-
-        for bundle in bundles:
-            start = configuration.derive(base, **bundle)
-            if mode == "grid":
-                yield from generate.grid(start, **axes)
-            elif mode == "one_at_a_time":
-                replicates = axes.pop("seed", [0])
-                yield from generate.one_at_a_time(
-                    start, seed=replicates, **axes
-                )
-            else:
-                raise SystemExit(
-                    f"unknown mode '{mode}' (known: grid, one_at_a_time)"
-                )
 
 
 # ----- Slurm files ----- #
@@ -224,14 +160,14 @@ def make(name: str | None = None) -> None:
         if not (EXPS_DIR / experiment / "run.py").exists():
             raise SystemExit(f"no experiment '{experiment}' to run it with")
 
-        campaign = list(configs(base, sweep))
+        campaign = list(runner.expand(base, sweep))
         if not campaign:
             raise SystemExit(f"sweep '{sweep_name}' describes no run")
 
         sweep_dir = TMPS_DIR / sweep_name
         if sweep_dir.is_dir():
             shutil.rmtree(sweep_dir)
-        generate.write(sweep_dir / "configs", experiment, campaign)
+        runner.write_campaign(sweep_dir / "configs", experiment, campaign)
 
         job_path = sweep_dir / JOB_NAME
         job_path.write_text(slurm_job_stream(sweep_name, sweep, len(campaign)))

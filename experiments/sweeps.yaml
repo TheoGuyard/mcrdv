@@ -22,6 +22,32 @@ common:
     num_chasers: 250
     max_load: 10
     max_time: 365d
+  # Cerf's 21 sun-synchronous debris, on Zona et al.'s (2023) terms: their
+  # ten-target missions, and the transfer model and epoch grid they plan on.
+  zona10: &zona10
+    name: cerf21
+    pick: [3, 5, 8, 11, 14, 15, 16, 17, 20, 21]
+    num_chasers: 2
+    max_load: 10
+    max_time: 720d
+  zona21: &zona21
+    name: cerf21
+    num_chasers: 4
+    max_load: 21
+    max_time: 720d
+  zona: &zona
+    type: mcrdv
+    args:
+      transfer: {type: shen_casalino}
+      schedule: {type: epoch, args: {step: 20d}}
+      sequence: {type: hgs, args: {preset: 5, max_time: 2m}}
+  # the ODRC of Narayanaswamy et al. (2023), departing from its deorbiter
+  odrc: &odrc
+    name: odrc
+    depot: first
+    num_chasers: 1
+    max_load: 12
+    max_time: 6y
   # solvers
   mcrdv: &mcrdv
     type: mcrdv
@@ -153,3 +179,171 @@ sweeps:
             - {type: qlaw_embargo, args: {start: 50d}}
           seed: {range: 10}
 
+  comparison:
+    walltime: "04:00:00"
+    memory: 8G
+    tasks: 16
+    base:
+      name: comparison
+      description: mcrdv beside planners of the literature, on their instances.
+      seed: 0
+      instance: *odrc
+      solver: *mcrdv
+    set:
+      # The NEXT thruster of Narayanaswamy et al.: 0.236 N on 700 kg.
+      solver.args.transfer.args.thrust: 3.3714e-4
+      solver.args.sequence.args.max_time: 2m
+    campaign:
+      # Narayanaswamy et al. (2023, Table 2): the tour of each of their seven
+      # methods (2-opt and 3-opt keep the Christofides tour, simulated
+      # annealing finds the Lin-Kernighan one), flown without waiting as they
+      # flew them, and with the waiting our schedule allows. The RAAN walk
+      # re-derives their exact tour.
+      - axes:
+          set: &narayanaswamy_tours
+            - method: tsp-exact
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[4, 10, 2, 3, 5, 1, 12, 7, 8, 6, 9, 11]]}
+            - method: tsp-nn
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[2, 3, 5, 1, 12, 7, 8, 4, 10, 6, 9, 11]]}
+            - method: tsp-christofides
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[4, 10, 11, 9, 6, 8, 7, 12, 1, 5, 3, 2]]}
+            - method: tsp-2opt
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[4, 10, 11, 9, 6, 8, 7, 12, 1, 5, 3, 2]]}
+            - method: tsp-3opt
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[4, 10, 11, 9, 6, 8, 7, 12, 1, 5, 3, 2]]}
+            - method: tsp-lk
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[2, 3, 5, 1, 12, 7, 8, 6, 9, 11, 10, 4]]}
+            - method: tsp-sa
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[2, 3, 5, 1, 12, 7, 8, 6, 9, 11, 10, 4]]}
+            - solver.args.sequence: {type: raan_walk}
+          solver.args.schedule.args.allow_waiting: [false, true]
+      # mcrdv on the same instance, from one chaser to four.
+      - axes:
+          instance.num_chasers: [1, 2, 3, 4]
+          solver.args.schedule.args.allow_waiting: [false, true]
+          seed: {range: 10}
+      # The eight targets they actually flew, priced on their dynamics (no
+      # J2) and on ours, against the RQ-law propellant they report.
+      - axes:
+          set:
+            - method: flown
+              solver.args.schedule.args.allow_waiting: false
+              solver.args.sequence:
+                type: fixed
+                args: {sequences: [[4, 10, 2, 3, 5, 1, 12, 7]]}
+          solver.args.transfer.type: [qlaw_frozen, qlaw]
+      # Their tours and the search on their dynamics, without J2 and without
+      # waiting: what the static proxy they sequence on costs, apart from what
+      # the drift of the nodes does to it.
+      - axes:
+          set: *narayanaswamy_tours
+          solver.args.transfer.type: [qlaw_frozen]
+          solver.args.schedule.args.allow_waiting: [false]
+      - axes:
+          solver.args.transfer.type: [qlaw_frozen]
+          solver.args.schedule.args.allow_waiting: [false]
+          seed: {range: 10}
+      # López Rivera & Naeije (2025): one chaser through missions drawn as
+      # theirs are, from a model of the Iridium-33 cloud of October 2024
+      # (`comparison/cloud.py`), on their transfer model and spacecraft,
+      # departing from the centroid of the cloud and on arrival at every
+      # debris. Their dynamic RAAN walk on 1000 missions per size, as many as
+      # they test on, calibrates the reproduction; mcrdv plans the first 200.
+      - axes:
+          set: &lopez_rivera
+            - instance: {name: iridium33_rivera, depot: first, num_targets: 10, num_chasers: 1, max_load: 10, max_time: 200y}
+              solver.args.transfer: {type: qlaw_lopez_rivera}
+              solver.args.schedule.args.allow_waiting: false
+            - instance: {name: iridium33_rivera, depot: first, num_targets: 30, num_chasers: 1, max_load: 30, max_time: 200y}
+              solver.args.transfer: {type: qlaw_lopez_rivera}
+              solver.args.schedule.args.allow_waiting: false
+            - instance: {name: iridium33_rivera, depot: first, num_targets: 50, num_chasers: 1, max_load: 50, max_time: 200y}
+              solver.args.transfer: {type: qlaw_lopez_rivera}
+              solver.args.schedule.args.allow_waiting: false
+          solver.args.sequence: [{type: drw}]
+          instance.draw: {range: 1000}
+      - axes:
+          set: *lopez_rivera
+          instance.draw: {range: 200}
+      # Zona et al. (2023): mcrdv on their instance, transfer model and grid.
+      # Their ten-target missions over the horizons of their Fig. 6, and the
+      # whole catalogue with four chasers over those of Fig. 9a.
+      - axes:
+          set:
+            - {instance: *zona10, solver: *zona}
+          instance.num_chasers: [2, 3]
+          instance.max_time: [300d, 360d, 420d, 480d, 540d, 600d, 660d, 720d]
+          seed: {range: 10}
+      - axes:
+          set:
+            - {instance: *zona21, solver: *zona}
+          instance.max_time: [360d, 420d, 480d, 540d, 600d, 660d]
+          seed: {range: 10}
+      # Their search benchmark: Cerf's fifteen on a 30-day grid.
+      - axes:
+          set:
+            - instance:
+                name: cerf21
+                pick: [16, 20, 21, 5, 17, 15, 3, 14, 11, 8, 1, 4, 9, 7, 12]
+                num_chasers: 3
+                max_load: 15
+                max_time: 720d
+              solver: *zona
+              solver.args.schedule.args.step: 30d
+          seed: {range: 10}
+      # What coordinating chasers buys on their terms: one to six chasers on
+      # the whole catalogue, and a single one on the ten targets.
+      - axes:
+          set:
+            - {instance: *zona21, solver: *zona}
+          instance.num_chasers: [1, 2, 3, 4, 5, 6]
+          seed: {range: 10}
+      - axes:
+          set:
+            - {instance: *zona10, solver: *zona, instance.num_chasers: 1}
+          seed: {range: 10}
+      # Their own tours (Figs. 7 and 9b), dated by our dynamic program on
+      # their grid: their plan and ours, on one oracle. The ten targets are
+      # indexed in the order picked: 3, 5, 8, 11, 14, 15, 16, 17, 20, 21.
+      - axes:
+          set:
+            - instance: *zona10
+              solver: *zona
+              method: zona
+              solver.args.sequence:
+                type: fixed
+                # 16-20-21-5-17 and 11-15-3-14-8
+                args: {sequences: [[7, 9, 10, 2, 8], [4, 6, 1, 5, 3]]}
+            - instance: *zona10
+              solver: *zona
+              method: zona
+              instance.num_chasers: 3
+              solver.args.sequence:
+                type: fixed
+                # 20-21-5-17, 14-3-15 and 16-8-11
+                args: {sequences: [[9, 10, 2, 8], [5, 1, 6], [7, 3, 4]]}
+            - instance: *zona21
+              solver: *zona
+              method: zona
+              solver.args.sequence:
+                type: fixed
+                args:
+                  sequences:
+                    - [10, 18, 14, 3, 15, 6]
+                    - [11, 7, 19, 8, 4, 16]
+                    - [20, 21, 9, 1, 12]
+                    - [17, 13, 2, 5]

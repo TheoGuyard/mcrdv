@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _common import export, plotting, tidy  # noqa: E402
+from _common import plotter  # noqa: E402
 
 
 def _infeasible(data):
@@ -13,20 +13,20 @@ def _infeasible(data):
 
 
 def time(ax, data):
-    export.band(ax, data.x, data.lo, data.hi, name="setup_iqr")
-    export.line(
+    plotter.band(ax, data.x, data.lo, data.hi, name="setup_iqr")
+    plotter.line(
         ax, data.x, data.median, name="setup", label="setup", marker="o"
     )
 
-    solve = [tidy.spread(group, "t_solve") for group in data.groups]
-    export.band(
+    solve = [plotter.spread(group, "t_solve") for group in data.groups]
+    plotter.band(
         ax,
         data.x,
         [s[1] for s in solve],
         [s[2] for s in solve],
         name="solve_iqr",
     )
-    export.line(
+    plotter.line(
         ax,
         data.x,
         [s[0] for s in solve],
@@ -38,8 +38,8 @@ def time(ax, data):
 
 
 def cost(ax, data):
-    export.band(ax, data.x, data.lo, data.hi, name="value_iqr")
-    export.line(ax, data.x, data.median, name="value", marker="o")
+    plotter.band(ax, data.x, data.lo, data.hi, name="value_iqr")
+    plotter.line(ax, data.x, data.median, name="value", marker="o")
 
     count, total = _infeasible(data)
     if count:
@@ -47,8 +47,8 @@ def cost(ax, data):
 
 
 def throughput(ax, data):
-    export.band(ax, data.x, data.lo, data.hi, name="throughput_iqr")
-    export.line(ax, data.x, data.median, name="throughput", marker="o")
+    plotter.band(ax, data.x, data.lo, data.hi, name="throughput_iqr")
+    plotter.line(ax, data.x, data.median, name="throughput", marker="o")
 
 
 DRAW_MAP = {
@@ -59,4 +59,4 @@ DRAW_MAP = {
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))

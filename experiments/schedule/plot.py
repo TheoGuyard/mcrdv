@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from _common import export, plotting, tidy  # noqa: E402
+from _common import plotter  # noqa: E402
 
 # How each method is drawn and what its columns are called. pgfplots column
 # names must stay plain, so the `+` and `-` of the method names stay on screen.
@@ -29,7 +29,9 @@ def _grids(rows, method):
 
 
 def _no_wait(rows, column):
-    return tidy.spread([r for r in rows if r.get("method") == NO_WAIT], column)
+    return plotter.spread(
+        [r for r in rows if r.get("method") == NO_WAIT], column
+    )
 
 
 def pareto(ax, data):
@@ -37,10 +39,10 @@ def pareto(ax, data):
         sizes, groups = _grids(data.rows, method)
         if not sizes:
             continue
-        calls = [1e6 * tidy.spread(g, "t_call")[0] for g in groups]
-        gaps = [tidy.spread(g, "gap_mean")[0] for g in groups]
+        calls = [1e6 * plotter.spread(g, "t_call")[0] for g in groups]
+        gaps = [plotter.spread(g, "gap_mean")[0] for g in groups]
         marks = sizes if method == "uniform+hints" else None
-        export.line(
+        plotter.line(
             ax,
             calls,
             gaps,
@@ -63,7 +65,7 @@ def pareto(ax, data):
     call = _no_wait(data.rows, "t_call")[0]
     centre = _no_wait(data.rows, "gap_mean")[0]
     if np.isfinite(call) and np.isfinite(centre):
-        export.points(
+        plotter.points(
             ax,
             [1e6 * call],
             [centre],
@@ -79,15 +81,15 @@ def gap(ax, data):
         sizes, groups = _grids(data.rows, method)
         if not sizes:
             continue
-        spread = [tidy.spread(g, "gap_mean") for g in groups]
-        export.band(
+        spread = [plotter.spread(g, "gap_mean") for g in groups]
+        plotter.band(
             ax,
             sizes,
             [s[1] for s in spread],
             [s[2] for s in spread],
             name=f"{name}_iqr",
         )
-        export.line(
+        plotter.line(
             ax,
             sizes,
             [s[0] for s in spread],
@@ -99,7 +101,7 @@ def gap(ax, data):
 
     centre = _no_wait(data.rows, "gap_mean")[0]
     if np.isfinite(centre) and drawn:
-        export.line(
+        plotter.line(
             ax,
             drawn,
             [centre] * len(drawn),
@@ -115,18 +117,18 @@ def time(ax, data):
         sizes, groups = _grids(data.rows, method)
         if not sizes:
             continue
-        export.line(
+        plotter.line(
             ax,
             sizes,
-            [1e6 * tidy.spread(g, "t_call")[0] for g in groups],
+            [1e6 * plotter.spread(g, "t_call")[0] for g in groups],
             name=f"{name}_call",
             label=f"call, {label}",
             marker="o",
         )
-        export.line(
+        plotter.line(
             ax,
             sizes,
-            [1e6 * tidy.spread(g, "t_per_leg")[0] for g in groups],
+            [1e6 * plotter.spread(g, "t_per_leg")[0] for g in groups],
             name=f"{name}_leg",
             label=f"new leg, {label}",
             marker="s",
@@ -159,7 +161,7 @@ def length(ax, data):
         if not legs.size:
             continue
         counts = np.unique(legs)
-        export.line(
+        plotter.line(
             ax,
             counts,
             [1e6 * np.median(calls[legs == n]) for n in counts],
@@ -178,4 +180,4 @@ DRAW_MAP = {
 
 
 if __name__ == "__main__":
-    raise SystemExit(plotting.main(__file__, DRAW_MAP))
+    raise SystemExit(plotter.main(__file__, DRAW_MAP))
